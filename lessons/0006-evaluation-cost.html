@@ -40,7 +40,7 @@
 
 <h2>2 · Harness evaluasi</h2>
 
-<p>Cukup satu file Node, tanpa dependency. Isi <code>cases</code> dari <code>eval/questions.md</code>.</p>
+<p>Cukup satu file Node, tanpa dependency. Isi <code>cases</code> dari <code>eval/questions.md</code>. Harness memakai dua jalur: <code>/search</code> untuk retrieval, dan <code>/chat?format=json</code> untuk jawaban — mode non-streaming yang kamu tambahkan di sesi 5.</p>
 
 <pre data-file="scripts/eval.mjs"><code>const BASE = process.env.BASE_URL;
 
@@ -63,10 +63,10 @@ for (const c of cases) {
 	const { results } = await res.json();
 
 	const rank = results.findIndex((r) =&gt; r.source === c.source) + 1;
-	ranks.push(c.source ? rank : 0);
+	if (c.source) ranks.push(rank);
 	if (c.source &amp;&amp; rank &gt; 0) hits += 1;
 
-	const chat = await fetch(`${BASE}/chat`, {
+	const chat = await fetch(`${BASE}/chat?format=json`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ question: c.q }),

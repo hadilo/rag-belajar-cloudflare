@@ -85,6 +85,11 @@ return new Response(stream, {
 
 <p>Binding mengembalikan <code>ReadableStream</code> berisi server-sent events. Kamu tidak perlu mem-parsing apa pun di Worker — teruskan saja. Di sisi klien, baca dengan <code>EventSource</code> atau <code>fetch</code> + <code>response.body.getReader()</code>.</p>
 
+<div class="note">
+	<span class="label">Streaming vs evaluasi</span>
+	<p>Streaming bagus untuk UI, tapi menyulitkan pengukuran. Sediakan juga jalur non-streaming: kalau request membawa <code>?format=json</code>, panggil model tanpa <code>stream: true</code> dan kembalikan <code>{ answer, sources }</code>. Sesi 6 memakai jalur itu untuk menghitung validitas sitasi.</p>
+</div>
+
 <h2>4 · Verifikasi sitasi di kode</h2>
 
 <p>Jangan percaya model soal sitasi. Ia bisa menyebut file yang tidak pernah masuk konteks, atau lupa menyebut sama sekali. Dua pemeriksaan murah menutup sebagian besar celah:</p>

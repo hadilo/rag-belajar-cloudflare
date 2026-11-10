@@ -276,7 +276,7 @@ figcaption {
 	line-height: 1.45;
 }
 
-.card h4 {
+.card h3 {
 	margin: 0 0 0.3rem;
 	font-size: 0.8rem;
 	font-weight: 650;
@@ -441,6 +441,17 @@ details p:last-child, details ul:last-child { margin-bottom: 0; }
 	padding: 0.05rem 0.45rem;
 	color: var(--muted);
 	vertical-align: 1px;
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 640px) {
+	.page { padding: 2rem 1rem 4rem; }
+	.lede { font-size: 1.06rem; }
+	pre { font-size: 0.76rem; }
+	table { font-size: 0.75rem; }
+	th, td { overflow-wrap: anywhere; }
+	.card { padding: 0.8rem 0.85rem; }
 }
 
 /* ---------- Print ---------- */

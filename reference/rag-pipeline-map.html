@@ -136,14 +136,14 @@
 
 <h2>6 · Hitungan biaya kasar</h2>
 
-<p class="small">Asumsi: 1.000 chunk × 400 token; tiap pertanyaan mengirim 8 chunk (3.200 token) + 300 token instruksi, output 300 token.</p>
+<p class="small">Asumsi: 1.000 chunk × 400 token; tiap pertanyaan mengirim 6 chunk (2.400 token) + 300 token instruksi, output 300 token.</p>
 
 <table>
 <thead><tr><th>Tahap</th><th>Perhitungan</th><th>Biaya</th></tr></thead>
 <tbody>
 <tr><td>Embedding seluruh korpus</td><td>400 rb token × $0,012/M</td><td>≈ $0,005 (sekali)</td></tr>
-<tr><td>Query + jawaban (qwen3-30b)</td><td>3,5 rb × $0,051/M + 300 × $0,335/M</td><td>≈ $0,0003 / pertanyaan</td></tr>
-<tr><td>Query + jawaban (llama-3.3-70b)</td><td>3,5 rb × $0,293/M + 300 × $2,253/M</td><td>≈ $0,0017 / pertanyaan</td></tr>
+<tr><td>Query + jawaban (qwen3-30b)</td><td>2,7 rb × $0,051/M + 300 × $0,335/M</td><td>≈ $0,00024 / pertanyaan</td></tr>
+<tr><td>Query + jawaban (llama-3.3-70b)</td><td>2,7 rb × $0,293/M + 300 × $2,253/M</td><td>≈ $0,0015 / pertanyaan</td></tr>
 <tr><td>Rerank 20 kandidat</td><td>8 rb token × $0,003/M</td><td>≈ $0,00002 / pertanyaan</td></tr>
 </tbody>
 </table>

@@ -43,14 +43,19 @@
 	const obj = await env.DOCS.get(key);
 	if (!obj) throw new Error(`Tidak ada objek: ${key}`);
 
-	const [result] = await env.AI.toMarkdown({
-		name: key,
-		blob: new Blob([await obj.arrayBuffer()]),
-	});
+	const [result] = await env.AI.toMarkdown([
+		{
+			name: key,
+			blob: new Blob([await obj.arrayBuffer()]),
+		},
+	]);
 
+	if (!result) throw new Error(`Konversi gagal: ${key}`);
 	if (result.format === "error") throw new Error(result.error);
 	return result.data;
 }</code></pre>
+
+<p class="small">Selalu kirim array, walau hanya satu file: input array mengembalikan array, input objek mengembalikan objek — destructuring akan gagal pada yang kedua.</p>
 
 <div class="note">
 	<span class="label">Kenapa R2 dulu</span>
@@ -133,6 +138,24 @@ npx wrangler vectorize create rag-index --dimensions=1024 --metric=cosine
 npx wrangler vectorize create-metadata-index rag-index \
   --property-name=source --type=string</code></pre>
 
+<p>Tambahkan binding berikut ke <code>wrangler.jsonc</code> yang sudah ada dari sesi 2, lalu jalankan <code>npx wrangler types</code>:</p>
+
+<pre data-file="wrangler.jsonc"><code>{
+  "ai": { "binding": "AI", "remote": true },
+  "r2_buckets": [
+    { "binding": "DOCS", "bucket_name": "rag-docs" }
+  ],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "rag", "database_id": "&lt;uuid&gt;" }
+  ],
+  "vectorize": [
+    { "binding": "INDEX", "index_name": "rag-index" }
+  ],
+  "workflows": [
+    { "name": "ingest", "binding": "INGEST", "class_name": "IngestWorkflow" }
+  ]
+}</code></pre>
+
 <div class="warn">
 	<span class="label">Urutan yang tidak bisa dibalik</span>
 	<p>Metadata index harus dibuat <strong>sebelum</strong> vektor di-upsert. Vektor yang masuk sebelum metadata index ada tidak akan bisa difilter; satu-satunya perbaikan adalah meng-upsert ulang semuanya.</p>
@@ -200,13 +223,17 @@ export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&g
 
 <p>Picu dari route kecil:</p>
 
-<pre data-file="src/index.ts"><code>app.post("/ingest", async (c) =&gt; {
+<pre data-file="src/index.ts"><code>export { IngestWorkflow } from "./ingest";
+
+app.post("/ingest", async (c) =&gt; {
 	const { key } = await c.req.json&lt;{ key: string }&gt;();
 	if (!key) return c.text("key wajib", 400);
 
 	const instance = await c.env.INGEST.create({ params: { key } });
 	return c.json({ id: instance.id }, 202);
 });</code></pre>
+
+<p>Baris ekspor itu wajib: Workflow hanya dikenali kalau kelasnya diekspor dari entry module yang ditunjuk <code>main</code> di <code>wrangler.jsonc</code>.</p>
 
 <h2>7 · Latihan</h2>
 
@@ -216,6 +243,7 @@ export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&g
 	<li>Catat jumlah baris: <code>npx wrangler d1 execute rag --remote --command "SELECT source, COUNT(*) FROM chunks GROUP BY source"</code>.</li>
 	<li>Jalankan ulang ingestion untuk dokumen yang sama.</li>
 	<li>Pastikan jumlah barisnya <strong>tidak berubah</strong>.</li>
+	<li>Bonus: integrasikan pemeriksaan hash dari bagian 4 ke dalam langkah embed, supaya chunk yang isinya tidak berubah tidak di-embed ulang.</li>
 </ol>
 
 <div class="win">

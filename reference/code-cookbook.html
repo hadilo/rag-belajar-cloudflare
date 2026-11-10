@@ -19,7 +19,7 @@
 <h1>Cookbook RAG di Cloudflare</h1>
 <p class="lede">Semua potongan kode yang dipakai sepanjang seri, dalam satu halaman. Disusun menurut urutan pipeline, bukan urutan sesi. Setiap blok diberi nama file tujuannya.</p>
 
-<h2>0 · Struktur project</h2>
+<h2>Struktur project</h2>
 
 <pre data-file="struktur project"><code>rag-belajar/
 ├── src/
@@ -129,11 +129,14 @@ CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
 <pre data-file="src/ingest.ts"><code>const obj = await env.DOCS.get(key);
 if (!obj) throw new Error(`Tidak ada objek: ${key}`);
 
-const [result] = await env.AI.toMarkdown({
-  name: key,
-  blob: new Blob([await obj.arrayBuffer()]),
-});
+const [result] = await env.AI.toMarkdown([
+  {
+    name: key,
+    blob: new Blob([await obj.arrayBuffer()]),
+  },
+]);
 
+if (!result) throw new Error(`Konversi gagal: ${key}`);
 if (result.format === "error") throw new Error(result.error);
 const text = result.data;</code></pre>
 
@@ -203,9 +206,10 @@ const { results } = await env.DB.prepare(
 ).bind(...ids).all();
 
 const byId = new Map(results.map((r) =&gt; [r.id, r]));
-const candidates = matches
-  .map((m) =&gt; ({ ...byId.get(m.id), score: m.score }))
-  .filter((c) =&gt; c.text);</code></pre>
+const candidates = matches.flatMap((m) =&gt; {
+  const row = byId.get(m.id);
+  return row ? [{ ...row, score: m.score }] : [];
+});</code></pre>
 
 <h2>10 · Rerank</h2>
 

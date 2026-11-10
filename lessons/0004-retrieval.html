@@ -55,9 +55,10 @@ const { results } = await env.DB.prepare(
 
 const byId = new Map(results.map((r) =&gt; [r.id, r]));
 
-const candidates = matches
-	.map((m) =&gt; ({ ...byId.get(m.id), score: m.score }))
-	.filter((c) =&gt; c.text);</code></pre>
+const candidates = matches.flatMap((m) =&gt; {
+	const row = byId.get(m.id);
+	return row ? [{ ...row, score: m.score }] : [];
+});</code></pre>
 
 <h2>3 · Filter metadata</h2>
 
@@ -182,8 +183,8 @@ const top = response
 	<div class="quiz-q" data-answer="0" data-explain="Ambil banyak untuk menjaga recall, lalu saring untuk menjaga presisi. Reranker mahal per pasangan, jadi tidak mungkin menjalankannya pada seluruh korpus.">
 		<p class="q-text">2. Kenapa mengambil 20 chunk lalu menyaringnya jadi 6?</p>
 		<div class="opts">
-			<button class="opt" type="button">Recall dijaga di tahap murah, presisi di tahap mahal</button>
-			<button class="opt" type="button">Karena Vectorize membatasi hasil maksimal enam</button>
+			<button class="opt" type="button">Recall dijaga di tahap murah, presisi setelahnya</button>
+			<button class="opt" type="button">Karena Vectorize membatasi hasilnya maksimal enam chunk</button>
 			<button class="opt" type="button">Karena model generasi hanya menerima enam chunk</button>
 			<button class="opt" type="button">Karena metadata hanya tersedia untuk enam hasil</button>
 		</div>
@@ -203,8 +204,8 @@ const top = response
 		<p class="q-text">4. Dari mana angka ambang skor yang layak berasal?</p>
 		<div class="opts">
 			<button class="opt" type="button">Nilai default dari dokumentasi model</button>
-			<button class="opt" type="button">Distribusi skor pada golden set sendiri</button>
-			<button class="opt" type="button">Rata-rata skor seluruh korpus</button>
+			<button class="opt" type="button">Distribusi skor golden set sendiri</button>
+			<button class="opt" type="button">Rata-rata skor dari seluruh korpus</button>
 			<button class="opt" type="button">Angka yang dipakai tutorial populer</button>
 		</div>
 	</div>

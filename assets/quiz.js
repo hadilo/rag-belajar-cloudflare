@@ -51,6 +51,7 @@
 
 					var fb = document.createElement("p");
 					fb.className = "feedback " + (isCorrect ? "ok" : "bad");
+					fb.setAttribute("role", "status");
 					fb.textContent = (isCorrect ? "Benar. " : "Belum tepat. ") + explanation;
 					q.appendChild(fb);
 
