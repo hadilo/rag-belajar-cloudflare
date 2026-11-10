@@ -19,9 +19,9 @@
 <p class="lede">Demo berjalan di laptop dengan tiga dokumen. Produksi menghadapi dokumen yang berubah, pengguna yang iseng, tagihan yang naik, dan dirimu enam bulan kemudian.</p>
 
 <p class="meta">
-	<span>±15 menit</span>
+	<span>±20 menit</span>
 	<span>Prasyarat: Sesi 6</span>
-	<span>Hasil: checklist produksi + keputusan akhir</span>
+	<span>Hasil: guardrail teruji + checklist produksi</span>
 </p>
 
 <h2>1 · Siapa yang boleh bertanya</h2>
@@ -39,7 +39,151 @@
 	<p>Batasi biaya dulu, baru buka akses. Lebih mudah menaikkan batas daripada menjelaskan tagihan tak terduga.</p>
 </div>
 
-<h2>2 · Prompt injection lewat dokumen</h2>
+<h2>2 · Guardrail di kode</h2>
+
+<p>Kalimat di atas baru berguna kalau ada di kode. Bagian ini memakai implementasi yang sudah diuji: enam guardrail, semuanya diperiksa lewat test HTTP, bukan lewat keyakinan.</p>
+
+<table>
+<thead><tr><th>Guardrail</th><th>Perilaku</th><th>Modul</th></tr></thead>
+<tbody>
+<tr><td>Autentikasi</td><td>Token → pengguna; tanpa konfigurasi valid semua ditolak</td><td><code>auth.ts</code></td></tr>
+<tr><td>Isolasi</td><td>Namespace Vectorize + kolom <code>owner</code> di D1</td><td><code>ingest.ts</code>, <code>search.ts</code></td></tr>
+<tr><td>Rate limit</td><td>30 req/menit per IP, 429 + <code>retry-after</code></td><td><code>ratelimit.ts</code></td></tr>
+<tr><td>Batas input</td><td>Panjang, pola key, ekstensi, ukuran file</td><td><code>limits.ts</code></td></tr>
+<tr><td>Penegakan sitasi</td><td>Sitasi asing → 422, jawaban tidak disajikan</td><td><code>grounding.ts</code></td></tr>
+<tr><td>Debug gate</td><td><code>/debug/*</code> 404 kecuali diaktifkan eksplisit</td><td><code>index.ts</code></td></tr>
+</tbody>
+</table>
+
+<h3>Fail closed, dan urutannya</h3>
+
+<p>Dua keputusan yang menentukan apakah guardrail ini nyata atau hiasan. Pertama: tanpa konfigurasi token yang valid, server <strong>menolak semua</strong> — bukan membuka diri. Kedua: urutannya auth → rate limit → route, supaya request tanpa token tidak menghabiskan kuota, dan endpoint debug tidak bisa dipakai sebelum identitas jelas.</p>
+
+<pre data-file="src/index.ts"><code>const identity = authenticate(request, env);
+if (identity instanceof Response) return identity;
+const user = identity.user;
+
+const limited = await rateLimit(env, request);
+if (limited) return limited;
+
+if (path.startsWith("/debug/") &amp;&amp; env.ENABLE_DEBUG !== "true") {
+	return json({ error: "not found" }, 404);
+}</code></pre>
+
+<p>Perhatikan bahwa fungsi auth mengembalikan <em>identitas atau respons penolakan</em>, bukan boolean. Dengan begitu pemanggil tidak punya pilihan untuk "lupa memeriksa hasilnya" — kesalahan tipe, bukan kelalaian.</p>
+
+<pre data-file="src/auth.ts"><code>export function authenticate(request: Request, env: Env): Identity | Response {
+	const map = tokenMap(env);
+	if (!map) {
+		return deny(500, { error: "server belum dikonfigurasi: API_TOKENS" });
+	}
+
+	const header = request.headers.get("authorization") ?? "";
+	const presented = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+
+	for (const [token, user] of Object.entries(map)) {
+		if (safeEqual(token, presented)) return { user };
+	}
+
+	return deny(401, { error: "unauthorized" }, { "www-authenticate": "Bearer" });
+}</code></pre>
+
+<p><code>safeEqual</code> membandingkan per karakter tanpa keluar lebih awal, supaya waktu respons tidak membocorkan panjang prefiks token yang benar. Untuk RAG pribadi ini berlebihan; untuk layanan dengan banyak pengguna, ini murah dan benar.</p>
+
+<h3>Isolasi: dua lapis, bukan satu</h3>
+
+<p>Filter metadata saja tidak cukup: ia hanya menyaring hasil yang sudah lolos, bukan membatasi ruang pencarian. Dan metadata bisa dipalsukan lewat ingestion. Karena itu isolasi dipasang di dua tempat sekaligus.</p>
+
+<pre data-file="src/search.ts"><code>const queryOptions: VectorizeQueryOptions = {
+	topK,
+	returnMetadata: "all",
+	namespace: user,
+};
+
+const { matches } = await env.INDEX.query(queryVector, queryOptions);</code></pre>
+
+<pre data-file="src/search.ts"><code>const { results } = await env.DB.prepare(
+	`SELECT id, source, chunk_index, text
+	 FROM chunks WHERE owner = ? AND id IN (${placeholders})`,
+)
+	.bind(user, ...ids)
+	.all&lt;{ id: string; source: string; chunk_index: number; text: string }&gt;();</code></pre>
+
+<p>Namespace membatasi kandidat sebelum top-K dihitung; <code>owner</code> memastikan baris teks yang diambil memang milik pemanggil. Kalau salah satu lupa dipasang, kebocoran tetap terjadi — jadi keduanya ditulis di satu jalur kode yang sama, bukan di route.</p>
+
+<div class="warn">
+	<span class="label">Yang tidak boleh diserahkan ke disiplin</span>
+	<p>Jangan mengandalkan setiap penulis query untuk ingat menambahkan <code>WHERE owner = ?</code>. Bungkus akses chunk dalam fungsi yang selalu meminta <code>user</code>, seperti <code>search(env, user, ...)</code>. Parameter yang wajib membuat kelalaian menjadi error kompilasi, bukan kebocoran data.</p>
+</div>
+
+<h3>Batas input sebelum biaya</h3>
+
+<p>Token dihitung per karakter yang masuk. Menolak input besar <em>sebelum</em> embedding adalah penghematan paling langsung, sekaligus perlindungan memori Worker.</p>
+
+<pre data-file="src/limits.ts"><code>export const MAX_QUESTION_CHARS = 2000;
+export const MAX_QUERY_CHARS = 500;
+export const MAX_KEY_CHARS = 200;
+export const MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+export function keyError(key: string): string | null {
+	if (!key || key.length &gt; MAX_KEY_CHARS) return "key tidak valid";
+	if (key.includes("..") || key.includes("\\") || key.startsWith("/")) return "key tidak valid";
+	if (!SAFE_KEY.test(key)) return "key tidak valid";
+
+	const dot = key.lastIndexOf(".");
+	if (dot &lt; 0) return "ekstensi tidak didukung";
+
+	const ext = key.slice(dot).toLowerCase();
+	if (!ALLOWED_EXTENSIONS.includes(ext)) return "ekstensi tidak didukung";
+
+	return null;
+}</code></pre>
+
+<p><code>keyError</code> menolak <code>..</code>, backslash, path absolut, dan ekstensi di luar allowlist. Tanpa ini, <code>key</code> yang datang dari klien bisa menunjuk objek di luar wilayahnya, atau memaksa konversi format yang tidak kamu dukung.</p>
+
+<p>Ukuran file diperiksa dari metadata R2, bukan setelah membaca isi:</p>
+
+<pre data-file="src/ingest.ts"><code>const obj = await env.DOCS.get(storageKey);
+if (!obj) throw new ObjectNotFoundError(key);
+if (obj.size &gt; MAX_FILE_BYTES) throw new PayloadTooLargeError(key);</code></pre>
+
+<h3>Sitasi: dari telemetri menjadi keputusan</h3>
+
+<p>Ini perubahan yang paling sering terlewat. Versi awal hanya <em>melaporkan</em> sitasi yang salah:</p>
+
+<pre data-file="respons"><code>{ "answer": "...", "invalid": ["catatan/palsu.md"] }</code></pre>
+
+<p>Klien menerima jawaban itu sebagai sukses. Padahal sitasi adalah satu-satunya cara pengguna memverifikasi jawaban; sitasi palsu yang lolos lebih berbahaya daripada tidak ada sitasi, karena memberi rasa aman yang salah.</p>
+
+<p>Sekarang kebijakannya eksplisit, dan jawaban yang mengutip sumber asing <strong>ditolak</strong>:</p>
+
+<pre data-file="src/grounding.ts"><code>export function assessAnswer(answer: string, sources: string[]): Assessment {
+	const allowed = new Set(sources);
+	const cited = parseCitations(answer);
+	const invalid = cited.filter((name) =&gt; !allowed.has(name));
+	const refused = REFUSAL.test(answer);
+
+	return {
+		cited,
+		invalid,
+		hasCitation: cited.length &gt; 0,
+		refused,
+		grounded: invalid.length === 0 &amp;&amp; (refused || cited.length &gt; 0),
+	};
+}</code></pre>
+
+<pre data-file="src/index.ts"><code>if (result.invalid.length &gt; 0) {
+	return json({ error: "unsupported_citation", invalid: result.invalid, sources: result.sources }, 422);
+}</code></pre>
+
+<div class="note">
+	<span class="label">Jebakan penanda konteks</span>
+	<p>Kalau konteks diberi label <code>[1]</code>, <code>[2]</code>, model akan mengutip nomor itu sebagai "sumber", dan pemeriksaan sitasi menganggapnya file asing — jawaban benar ikut ditolak. Label harus berbentuk nama file: <code>Konteks 1 (catatan/rag.md)</code>. Parser juga mengabaikan isi kurung yang seluruhnya angka.</p>
+</div>
+
+<p>Untuk streaming, pemeriksaan setelah fakta tidak mungkin: kamu sudah mengirim teksnya. Karena itu stream ditandai jujur di header — <code>x-grounding: unverified</code> — dan jalur <code>?format=json</code> disediakan untuk klien yang butuh jaminan. Jangan memberi label "verified" pada sesuatu yang belum diperiksa.</p>
+
+<h2>3 · Prompt injection lewat dokumen</h2>
 
 <p>Chunk yang masuk ke prompt adalah input tidak tepercaya. Kalau korpusmu hanya berisi tulisanmu sendiri, risikonya rendah; begitu ada PDF dari luar, email, atau halaman web hasil scrape, risikonya nyata.</p>
 
@@ -58,7 +202,7 @@
 
 <p>Yang paling penting: jangan pernah memberi model akses ke aksi bernilai tinggi (menghapus, mengirim, membayar) ketika input-nya bisa berasal dari dokumen. RAG yang hanya menjawab teks jauh lebih mudah diamankan daripada agent yang bisa bertindak.</p>
 
-<h2>3 · Dokumen berubah, dan kadang harus hilang</h2>
+<h2>4 · Dokumen berubah, dan kadang harus hilang</h2>
 
 <p>Ingestion satu kali adalah demo. Produksi butuh tiga operasi: tambah, ubah, hapus — dan semuanya harus konsisten antara D1 dan Vectorize.</p>
 
@@ -111,7 +255,7 @@
 
 <p>Jangan lakukan big bang. Selama backfill, dua indeks hidup berdampingan; biayanya kecil, dan kamu punya jalan mundur.</p>
 
-<h2>4 · Observability</h2>
+<h2>5 · Observability</h2>
 
 <p>Tiga hal yang perlu kamu lihat tanpa membuka dashboard setiap hari:</p>
 
@@ -123,7 +267,7 @@
 
 <p>Log per request dibatasi 256 KB. Jangan pernah mencatat isi dokumen penuh atau pertanyaan pengguna tanpa alasan yang jelas — itu data pribadi yang masuk ke sistem log.</p>
 
-<h2>5 · Kapan berhenti membangun sendiri</h2>
+<h2>6 · Kapan berhenti membangun sendiri</h2>
 
 <p>Kamu sekarang tahu isi setiap kotak. Itu justru membuat keputusan ini bisa diambil dengan jernih.</p>
 
@@ -141,13 +285,17 @@
 
 <p>Kaidah praktisnya: kalau kamu mengejar produk dan pipeline-mu tidak berbeda dari standar, pakai yang managed. Kalau pipeline-mu adalah keunggulan kompetitifnya — chunking khusus, domain spesifik, evaluasi sendiri — bangun sendiri, karena kamu baru saja membuktikan bahwa kamu bisa.</p>
 
-<h2>6 · Checklist akhir</h2>
+<h2>7 · Checklist akhir</h2>
 
 <ul class="checklist">
 	<li>Akses dibatasi (Access atau sesi sendiri) dan rate limit aktif.</li>
+	<li>Auth <em>fail closed</em>: tanpa konfigurasi token, server menolak, bukan terbuka.</li>
+	<li>Urutan guardrail: auth → rate limit → route; <code>/debug/*</code> mati di produksi.</li>
+	<li>Isolasi dua lapis: namespace vektor <em>dan</em> filter <code>owner</code> di database.</li>
+	<li>Batas input dipasang sebelum embedding: panjang, pola key, ekstensi, ukuran file.</li>
 	<li><code>max_tokens</code> dan topK punya batas atas yang eksplisit.</li>
 	<li>Chunk diperlakukan sebagai data tak tepercaya; tidak ada aksi berisiko dari isi dokumen.</li>
-	<li>Sitasi diverifikasi di kode; jawaban tanpa sitasi ditandai.</li>
+	<li>Sitasi <em>ditegakkan</em>: sitasi asing ditolak, bukan hanya dilaporkan.</li>
 	<li>Penghapusan menghapus R2 + D1 + vektor, dan sudah diuji.</li>
 	<li>Ingestion bisa diulang tanpa duplikasi; ada jalur backfill untuk migrasi model.</li>
 	<li>Harness evaluasi dijalankan setiap deploy, hasilnya disimpan bertanggal.</li>
@@ -155,11 +303,54 @@
 	<li>Biaya per 1.000 pertanyaan diketahui angkanya, bukan perkiraan.</li>
 </ul>
 
-<h2>7 · Cek pemahaman</h2>
+<h3>Uji guardrail, jangan diasumsikan</h3>
+
+<p>Semua perilaku di atas punya test yang berjalan lewat HTTP, bukan lewat inspeksi kode. Bentuk test-nya sederhana: kirim request, periksa status dan bentuk respons.</p>
+
+<pre data-file="test/guardrails.test.mjs"><code>test("rejects a request without a token", async () =&gt; {
+	const res = await fetch(`${BASE}/health`, { headers: { "cf-connecting-ip": IP } });
+	assert.equal(res.status, 401);
+});
+
+test("rate limits repeated requests from one client", async () =&gt; {
+	for (let i = 0; i &lt; 40; i++) {
+		const res = await request("/health");
+		if (res.status === 429) {
+			assert.ok(Number(res.headers.get("retry-after")) &gt; 0);
+			return;
+		}
+	}
+	assert.fail("tidak pernah kena 429");
+});</code></pre>
+
+<pre data-file="test/isolation.test.mjs"><code>test("one user cannot retrieve another user's chunks", async () =&gt; {
+	const devHits = await search("dev", "frasa beta unik milik bob");
+	assert.ok(
+		devHits.hits.every((h) =&gt; h.source !== B_KEY),
+		"dev tidak boleh melihat dokumen bob",
+	);
+});</code></pre>
+
+<div class="note">
+	<span class="label">Test yang menguji dirinya sendiri</span>
+	<p>Dua jebakan yang muncul saat menulis test ini. Pertama: <code>every()</code> pada array kosong selalu benar, jadi test isolasi bisa lolos hanya karena pencarian belum selesai. Sertakan <code>hits.length &gt; 0</code>. Kedua: jawaban model tidak deterministik, jadi menguji jawaban eksak akan flaky — uji kontraknya (200 harus punya <code>grounded</code>, 422 harus <code>unsupported_citation</code>).</p>
+</div>
+
+<h2>8 · Cek pemahaman</h2>
 
 <details>
 	<summary>Dari memori: kenapa menghapus vektor tidak cukup untuk menghapus sebuah dokumen?</summary>
 	<p>Karena dokumen hidup di tiga tempat: objek asli di R2, teks chunk di D1, dan vektor di Vectorize. Menghapus satu saja menyisakan sumber yang bisa dipakai ulang atau ditampilkan. R2 yang tersisa bahkan bisa di-ingest ulang dan memunculkan kembali dokumen yang "sudah dihapus".</p>
+</details>
+
+<details>
+	<summary>Dari memori: kenapa filter metadata saja tidak cukup untuk isolasi per pengguna?</summary>
+	<p>Filter hanya menyaring kandidat yang sudah lolos, dan metadata bisa dipalsukan lewat ingestion. Yang membatasi ruang pencarian adalah namespace; yang memastikan teks yang diambil memang milik pemanggil adalah kolom <code>owner</code>. Satu lapisan bisa lupa dipasang; dua lapisan di satu jalur kode jauh lebih sulit bocor.</p>
+</details>
+
+<details>
+	<summary>Dari memori: apa bedanya "melaporkan" sitasi dan "menegakkan" sitasi?</summary>
+	<p>Melaporkan berarti jawaban tetap dikirim sebagai sukses, dengan field tambahan yang mungkin tidak dibaca klien. Menegakkan berarti jawaban yang mengutip sumber asing tidak disajikan sama sekali. Yang kedua mengubah nilai sitasi dari hiasan menjadi jaminan.</p>
 </details>
 
 <div class="quiz">
@@ -204,17 +395,62 @@
 		</div>
 	</div>
 
+	<div class="quiz-q" data-answer="3" data-explain="Urutan auth lebih dulu berarti request tanpa identitas tidak menghabiskan kuota, dan endpoint debug tidak bisa dipakai sebelum identitas jelas.">
+		<p class="q-text">5. Mengapa autentikasi diperiksa sebelum rate limit?</p>
+		<div class="opts">
+			<button class="opt" type="button">Supaya token tidak perlu disimpan di memori</button>
+			<button class="opt" type="button">Supaya rate limit bisa dihitung per pengguna</button>
+			<button class="opt" type="button">Supaya respons 401 terasa lebih cepat</button>
+			<button class="opt" type="button">Supaya request tanpa identitas tidak memakai kuota</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="1" data-explain="Namespace membatasi ruang pencarian sebelum top-K dihitung; filter metadata hanya menyaring hasil yang sudah lolos. Keduanya dipakai bersama agar tidak bergantung pada satu lapisan.">
+		<p class="q-text">6. Kenapa isolasi per pengguna memakai namespace, bukan filter metadata saja?</p>
+		<div class="opts">
+			<button class="opt" type="button">Karena filter metadata tidak didukung Vectorize</button>
+			<button class="opt" type="button">Karena namespace membatasi ruang sebelum top-K</button>
+			<button class="opt" type="button">Karena namespace membuat vektor lebih kecil</button>
+			<button class="opt" type="button">Karena filter metadata hanya berlaku saat upsert</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="0" data-explain="Sitasi yang tidak ada di sources menandakan jawaban tidak bersandar pada konteks. Menyajikannya sebagai sukses membuat pengguna mempercayai rujukan palsu.">
+		<p class="q-text">7. Apa yang harus terjadi bila model mengutip file yang tidak ada di konteks?</p>
+		<div class="opts">
+			<button class="opt" type="button">Jawaban ditolak dan ditandai tidak bersumber</button>
+			<button class="opt" type="button">Jawaban dikirim dengan daftar invalid di dalamnya</button>
+			<button class="opt" type="button">Sitasi palsu itu dihapus dari teks jawaban</button>
+			<button class="opt" type="button">Model dipanggil ulang tanpa mengubah prompt</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="2" data-explain="Batas diperiksa dari metadata objek sebelum isi dibaca, sehingga pekerjaan mahal dan konsumsi memori tidak pernah terjadi untuk file yang terlalu besar.">
+		<p class="q-text">8. Kapan ukuran file sebaiknya diperiksa saat ingestion?</p>
+		<div class="opts">
+			<button class="opt" type="button">Setelah teks diekstrak menjadi markdown</button>
+			<button class="opt" type="button">Setelah seluruh chunk selesai di-embed</button>
+			<button class="opt" type="button">Sebelum isi objek dibaca ke memori</button>
+			<button class="opt" type="button">Setelah vektor masuk ke indeks</button>
+		</div>
+	</div>
+
 </div>
 
-<h2>8 · Sumber utama</h2>
+<h2>9 · Sumber utama</h2>
 
 <p><a href="https://developers.cloudflare.com/reference-architecture/diagrams/ai/ai-rag/">Cloudflare — Reference architecture: RAG</a>. Bandingkan diagram resmi itu dengan peta yang kamu gambar di sesi 1. Kalau kamu bisa menjelaskan setiap kotak dan setiap panahnya, kamu sudah menyelesaikan seri ini dengan benar.</p>
 
-<p class="small">Rujukan: <a href="https://developers.cloudflare.com/ai-search/">AI Search</a> · <a href="https://developers.cloudflare.com/workers/platform/limits/">Workers limits</a> · <a href="https://developers.cloudflare.com/r2/buckets/event-notifications/">R2 event notifications</a> · <a href="https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/">Cloudflare Access</a>.</p>
+<p class="small">Rujukan: <a href="https://developers.cloudflare.com/workers/runtime-apis/bindings/">Workers bindings</a> · <a href="https://developers.cloudflare.com/durable-objects/">Durable Objects</a> · <a href="https://developers.cloudflare.com/vectorize/best-practices/insert-vectors/#namespaces">Vectorize namespaces</a> · <a href="https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/">Cloudflare Access</a> · <a href="https://developers.cloudflare.com/ai-search/">AI Search</a> · <a href="https://developers.cloudflare.com/workers/platform/limits/">Workers limits</a> · <a href="https://developers.cloudflare.com/r2/buckets/event-notifications/">R2 event notifications</a>.</p>
 
 <div class="next">
 	<span class="label">Setelah seri ini</span>
-	<p>Pilih satu: (a) perluas korpus dan lihat di titik mana evaluasimu mulai turun, (b) tambahkan hybrid search dan ukur dampaknya, atau (c) bangun UI yang menampilkan chunk sumber di samping jawaban. Ketiganya lebih berharga daripada menambah fitur baru.</p>
+	<p>Pilih satu: (a) perluas korpus dan lihat di titik mana evaluasimu mulai turun, (b) tambahkan hybrid search dan ukur dampaknya, atau (c) bangun UI yang menampilkan chunk sumber di samping jawaban beserta status <code>grounded</code>. Ketiganya lebih berharga daripada menambah fitur baru.</p>
+</div>
+
+<div class="next">
+	<span class="label">Latihan penutup</span>
+	<p>Ambil satu guardrail di sesi ini dan coba tembus: kirim pertanyaan kepanjangan, palsukan token, coba baca dokumen pengguna lain, atau paksa model mengutip file asing. Kalau semuanya ditolak dengan status yang benar, kamu bukan hanya punya demo — kamu punya sistem yang bisa dipertahankan.</p>
 </div>
 
 <div class="next">

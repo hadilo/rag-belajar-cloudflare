@@ -80,6 +80,9 @@ Materi dan cookbook disamakan dengan implementasi yang lulus test:
 - Sesi 2 mencatat keterbatasan tipe hasil `wrangler types` dan pola wrapper `src/ai.ts`.
 - Cookbook menambah wrapper AI, `ingestDoc` lengkap, dan contoh test API.
 
+## Sesi 7 diperluas dengan guardrail (Nov 2026)
+Bagian baru "Guardrail di kode" mengajarkan implementasi yang lulus 22 test: auth fail-closed dengan token→pengguna, urutan auth → rate limit → route, isolasi namespace + owner, batas input sebelum embedding, dan penegakan sitasi (422, bukan telepon). Termasuk jebakan penanda konteks `[1]` dan dua jebakan test (`every()` pada array kosong, jawaban model non-deterministik).
+
 ## Konvensi materi
 - Setiap blok kode **wajib** punya label nama file lewat `<pre data-file="...">`, ditampilkan oleh CSS `pre[data-file]::before`.
 - Blok yang bukan file diberi label jujur: `terminal` (perintah shell), `respons` (contoh keluaran), `rumus` (notasi).
