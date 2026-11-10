@@ -103,6 +103,8 @@ Jika mengubah chunking, prompt, atau model: jalankan ulang langkah 2–5 pada se
 - **Propagasi Vectorize 40–60 detik.** Upsert yang belum terlihat bukan berarti gagal; tunggu sebelum menyimpulkan.
 - **Metadata filter butuh urutan dan waktu.** Re-upsert setelah metadata index siap, lalu tunggu sekitar satu menit.
 - **R2 belum aktif di akun ini**, jadi `DOCS` berjalan lokal. `wrangler r2` remote akan gagal sampai R2 diaktifkan di dashboard.
+- **Test menolak berjalan di luar localhost.** `test/guard.mjs` memeriksa `BASE_URL`; jangan melewatinya. Test ini menulis dan menghapus data, jadi menjalankannya ke produksi akan merusak korpus.
+- **Repo ini publik.** Jangan pernah menambahkan secret, ID akun, hasil `wrangler d1 export`, atau dokumen pribadi ke dalam tree. Token `dev-token` sengaja ada di dokumentasi untuk lokal, bukan untuk deployment.
 - **Vectorize berjalan remote**, D1 dan R2 lokal. Jangan mengubah `remote` tanpa memahami konsekuensinya.
 - Model AI berjalan remote; setiap uji memakai neuron. Hindari loop pengujian besar tanpa alasan.
 

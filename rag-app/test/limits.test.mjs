@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { baseUrl } from "./guard.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
-const BASE = process.env.BASE_URL ?? "http://localhost:8787";
+const BASE = baseUrl();
 const TOKEN = process.env.API_TOKEN ?? "dev-token";
 
 function post(path, body) {

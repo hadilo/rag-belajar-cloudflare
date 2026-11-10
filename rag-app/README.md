@@ -206,15 +206,45 @@ Dimensi terkunci, jadi ini migrasi: buat indeks baru → backfill seluruh korpus
 | `npm install` gagal `ENOSPC` | Disk penuh | Kosongkan ruang; kode ini juga jalan dengan Wrangler dari cache |
 | Jawaban mengarang | Chunk benar tidak terambil | Periksa `/search` dulu, baru prompt |
 
+## Aman untuk repo publik?
+
+Ya, dengan lima syarat yang sudah dipenuhi repo ini:
+
+| Hal | Status |
+|---|---|
+| Secret | Tidak ada di kode. `API_TOKENS` hanya dari `.dev.vars` (gitignored) atau `wrangler secret put` |
+| Riwayat git | Bersih: `.dev.vars` tidak pernah di-commit (diverifikasi lewat `git log --all`) |
+| ID akun | Tidak ada. `wrangler.jsonc` memakai `database_id` placeholder |
+| Data pengguna | Tidak ada. Seed hanya dokumen contoh |
+| Test | Menolak berjalan bila `BASE_URL` bukan lokal, karena test menulis dan menghapus data |
+
+Yang aman dibagikan: seluruh `src/`, `test/`, `schema.sql`, `wrangler.jsonc`, `package-lock.json`, dan `worker-configuration.d.ts` (berisi tipe SDK Cloudflare, bukan kredensial).
+
+Yang **tidak** boleh masuk repo:
+
+- `.dev.vars` — token nyata. Sudah di `.gitignore`.
+- `.wrangler/` — state lokal D1/R2, bisa memuat isi dokumenmu.
+- `node_modules/` — sudah diabaikan.
+- Dokumen asli di R2 — di produksi, jangan pernah menaruh korpus pribadi di repo. Pakai R2.
+
+Dua jebakan yang mudah terlewat:
+
+1. **Token contoh jangan dipakai di produksi.** `dev-token` ada di dokumentasi dan test supaya bisa dijalankan siapa pun. Kalau kamu men-deploy tanpa mengganti `API_TOKENS`, siapa pun yang membaca repo ini bisa memakai token itu. Buat token acak: `openssl rand -hex 32`.
+2. **Jangan commit hasil `wrangler d1 export`.** Perintah itu mengeluarkan seluruh isi tabel, termasuk teks chunk milikmu.
+
+Kalau ingin berbagi contoh kode tanpa membocorkan isi, tambahkan `eval/` dan korpus ke `.gitignore`, lalu sediakan `seed` seperti di repo ini.
+
 ## Keamanan dan batasan
 
-Ini demo lokal, bukan layanan produksi.
+Ini demo yang bisa dijalankan, bukan layanan produksi siap pakai.
 
-- **Tanpa autentikasi dan rate limit.** Jangan diekspos ke internet tanpa Cloudflare Access dan pembatas request.
+- **Autentikasi dan rate limit ada**, tetapi rate limit dihitung per IP, bukan per pengguna. Perlindungan terhadap penyalahgunaan terdistribusi tetap perlu Cloudflare Access atau WAF.
 - **Chunk diperlakukan sebagai data tak tepercaya.** Prompt melarang mengikuti instruksi di dalam dokumen, tetapi pertahanan sebenarnya adalah tidak memberi model akses ke aksi berisiko.
 - **Tidak ada logging isi dokumen.** Jangan menambahkannya tanpa alasan; itu data pribadi.
 - **Belum ada evaluasi otomatis.** Perubahan chunking/prompt/model harus diukur dengan set pertanyaan tetap (lihat sesi 6).
-- **Belum ada penghapusan dokumen.** Menghapus satu sumber berarti membersihkan R2, D1, dan Vectorize sekaligus.
+- **Belum ada endpoint hapus dokumen.** Menghapus satu sumber masih manual: R2, D1, dan Vectorize sekaligus.
+- **Belum ada moderasi konten dan audit log.**
+- **Data di R2 tidak dienkripsi per pengguna.** Isolasi berlaku di jalur aplikasi, bukan di tingkat penyimpanan.
 
 ## Biaya
 

@@ -1,7 +1,8 @@
 import { test } from "node:test";
+import { baseUrl } from "./guard.mjs";
 import assert from "node:assert/strict";
 
-const BASE = process.env.BASE_URL ?? "http://localhost:8787";
+const BASE = baseUrl();
 const TOKEN = process.env.API_TOKEN ?? "dev-token";
 const IP = `198.51.100.${Math.floor(Math.random() * 200) + 1}`;
 
