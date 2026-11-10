@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG di Cloudflare — Belajar dari nol</title>
+<link rel="stylesheet" href="assets/course.css">
+</head>
+<body>
+<main class="page">
+
+<div class="kicker">Workspace belajar</div>
+<h1>RAG chat di Cloudflare, dari nol</h1>
+<p class="lede">Membangun chatbot yang menjawab dari dokumen sendiri — manual, dengan Workers, Vectorize, dan Workers AI. Tiap sesi satu konsep, satu latihan, satu sumber utama.</p>
+
+<p class="meta">
+	<span>7 sesi</span>
+	<span>Bahasa Indonesia</span>
+	<span>TypeScript</span>
+</p>
+
+<h2>Sesi</h2>
+
+<div class="cards">
+	<div class="card">
+		<h4><a href="lessons/0001-mental-model-rag.html">1 · Dua loop yang menentukan segalanya</a></h4>
+		<p>Peta pipeline RAG, enam komponen Cloudflare, tiga mode kegagalan. Plus latihan menyusun set pertanyaan uji.</p>
+	</div>
+	<div class="card">
+		<h4>2 · Panggilan pertama</h4>
+		<p>Scaffold Worker, binding <code>AI</code>, embedding <code>bge-m3</code>, deploy. Belum ditulis.</p>
+	</div>
+	<div class="card">
+		<h4>3 · Chunking &amp; ingestion</h4>
+		<p>Ekstraksi, recursive split, metadata, ID deterministik, Workflow. Belum ditulis.</p>
+	</div>
+	<div class="card">
+		<h4>4 · Retrieval</h4>
+		<p>topK, filter metadata, hybrid search, reranker. Belum ditulis.</p>
+	</div>
+	<div class="card">
+		<h4>5 · Generation &amp; sitasi</h4>
+		<p>Prompt yang bersandar pada konteks, streaming, anggaran token. Belum ditulis.</p>
+	</div>
+	<div class="card">
+		<h4>6–7 · Evaluasi, biaya, produksi</h4>
+		<p>Mengukur recall, menekan biaya, cache, rate limit, keamanan. Belum ditulis.</p>
+	</div>
+</div>
+
+<h2>Referensi</h2>
+
+<ul>
+	<li><a href="reference/rag-pipeline-map.html">Cheat sheet — peta RAG di Cloudflare</a> · dua loop, angka batas, parameter awal, hitungan biaya. Dirancang untuk dicetak.</li>
+</ul>
+
+<h2>Tentang</h2>
+
+<p>Materi disusun November 2026. Angka batas dan harga mengacu pada dokumentasi Cloudflare saat itu. Model embedding yang dipakai <code>@cf/baai/bge-m3</code> (1024 dimensi, multibahasa), bukan <code>bge-base-en-v1.5</code> yang dipakai tutorial resmi, karena korpusnya berbahasa Indonesia.</p>
+
+<p class="small">Sumber: <a href="https://developers.cloudflare.com/workers-ai/guides/tutorials/build-a-retrieval-augmented-generation-ai/">Cloudflare — Build a RAG AI</a> · <a href="https://developers.cloudflare.com/vectorize/">Vectorize</a> · <a href="https://www.anthropic.com/research/contextual-retrieval">Anthropic — Contextual Retrieval</a></p>
+
+<div class="foot">
+	<span>RAG di Cloudflare</span>
+	<span><a href="https://github.com/hadilo/rag-belajar-cloudflare">Repo</a></span>
+</div>
+
+</main>
+</body>
+</html>
