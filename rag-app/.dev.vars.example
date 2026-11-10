@@ -1,0 +1,9 @@
+# Salin ke .dev.vars untuk pengembangan lokal.
+# Satu token = satu pengguna; namespace Vectorize dan kolom owner D1
+# memakai nama pengguna ini.
+API_TOKENS={"token-dev":"dev","token-kedua":"bob"}
+
+# Untuk produksi: npx wrangler secret put API_TOKENS
+
+# Aktifkan hanya saat mengembangkan endpoint /debug/*
+ENABLE_DEBUG=true

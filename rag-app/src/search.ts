@@ -47,6 +47,7 @@ export function lexicalRank(question: string, candidates: Hit[]): string[] {
 
 export async function search(
 	env: Env,
+	user: string,
 	question: string,
 	topK = 20,
 	finalK = 6,
@@ -61,6 +62,7 @@ export async function search(
 	const queryOptions: VectorizeQueryOptions = {
 		topK,
 		returnMetadata: "all",
+		namespace: user,
 	};
 	if (opts.source) queryOptions.filter = { source: opts.source };
 
@@ -75,9 +77,9 @@ export async function search(
 
 	const { results } = await env.DB.prepare(
 		`SELECT id, source, chunk_index, text
-		 FROM chunks WHERE id IN (${placeholders})`,
+		 FROM chunks WHERE owner = ? AND id IN (${placeholders})`,
 	)
-		.bind(...ids)
+		.bind(user, ...ids)
 		.all<{ id: string; source: string; chunk_index: number; text: string }>();
 
 	const byId = new Map(results.map((r) => [r.id, r]));

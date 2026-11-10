@@ -1,10 +1,11 @@
 import { SYSTEM } from "./prompt";
 import { generate, generateStream } from "./ai";
+import { assessAnswer } from "./grounding";
 import type { Hit } from "./search";
 
 export function buildMessages(question: string, hits: Hit[]) {
 	const context = hits
-		.map((c, i) => `[${i + 1}] sumber: ${c.source}\n${c.text}`)
+		.map((c, i) => `Konteks ${i + 1} (${c.source}):\n${c.text}`)
 		.join("\n\n");
 
 	return [
@@ -17,15 +18,7 @@ export function buildMessages(question: string, hits: Hit[]) {
 }
 
 export function verifyCitations(answer: string, hits: Hit[]) {
-	const allowed = new Set(hits.map((h) => h.source));
-	const cited = [...answer.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1].trim());
-	const unique = [...new Set(cited)];
-
-	return {
-		cited: unique,
-		invalid: unique.filter((s) => !allowed.has(s)),
-		hasCitation: cited.length > 0,
-	};
+	return assessAnswer(answer, [...new Set(hits.map((h) => h.source))]);
 }
 
 export async function answer(env: Env, question: string, hits: Hit[]) {

@@ -3,6 +3,23 @@
 	"name": "rag-belajar-app",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-11-10",
+	"vars": {
+		"ENABLE_DEBUG": "false"
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "LIMITER",
+				"class_name": "RateLimiter"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["RateLimiter"]
+		}
+	],
 	"ai": {
 		"binding": "AI",
 		"remote": true

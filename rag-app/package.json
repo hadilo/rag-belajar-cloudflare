@@ -7,7 +7,7 @@
 		"deploy": "wrangler deploy",
 		"types": "wrangler types",
 		"schema": "wrangler d1 execute rag --local --file=schema.sql",
-		"test": "node --test test/api.test.mjs",
+		"test": "node --test --test-concurrency=1 test/api.test.mjs test/guardrails.test.mjs test/grounding.test.mjs test/limits.test.mjs test/isolation.test.mjs",
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {

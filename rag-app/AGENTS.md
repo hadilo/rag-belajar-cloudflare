@@ -18,11 +18,14 @@ npx wrangler dev --port 8787
 npx wrangler d1 execute rag --local --file=schema.sql
 
 # seed + indeks dokumen contoh
-curl -X POST localhost:8787/seed
-curl -X POST localhost:8787/ingest -H 'content-type: application/json' -d '{"all":true}'
+TOKEN=dev-token
+curl -X POST localhost:8787/seed -H "authorization: Bearer $TOKEN"
+curl -X POST localhost:8787/ingest -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"all":true}'
 
 # tanya
-curl -X POST 'localhost:8787/chat?format=json' -H 'content-type: application/json' -d '{"question":"..."}'
+curl -X POST 'localhost:8787/chat?format=json' -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"question":"..."}'
 
 # verifikasi
 npm test            # butuh dev server berjalan
@@ -58,6 +61,12 @@ Jangan menaruh logika retrieval di `index.ts`; route hanya memanggil fungsi dari
 10. **Chunk adalah input tidak tepercaya.** Jangan memberi model kemampuan memicu aksi (fetch, tulis DB, kirim pesan) berdasarkan isi dokumen.
 11. **Ingestion harus merekonsiliasi.** Setelah memproses chunk baru, hapus ID lama milik sumber yang sama dari D1 dan Vectorize. Tanpa ini, dokumen yang menyusut meninggalkan chunk yatim yang masih bisa muncul di jawaban.
 12. **Panggilan AI lewat `src/ai.ts`.** Tipe hasil `wrangler types` tidak lengkap (input reranker kehilangan `query`, output embedding berupa union), jadi cast diisolasi di sana. Jangan memanggil `env.AI.run` langsung dari modul domain, dan jangan melepas `run` dari objeknya — `this` hilang dan gagal saat runtime.
+13. **Guardrail berurutan: auth → rate limit → route.** Jangan membaliknya; request tanpa token tidak boleh menghabiskan kuota, dan endpoint debug harus dicek setelah auth.
+14. **Fail closed.** Tanpa `API_TOKENS` (atau `API_TOKEN`) yang valid, endpoint yang dilindungi menolak semua request. Jangan menambah fallback "kalau kosong berarti terbuka".
+15. **Token tidak pernah dicetak atau dilog.** Nilai token hanya dari secret/`.dev.vars`; `.dev.vars` tidak boleh di-commit.
+16. **Isolasi selalu dua lapis: namespace Vectorize + kolom `owner` di D1.** Setiap upsert/query memakai `namespace: user`; setiap SELECT/DELETE menyertakan `owner = ?`. Jangan menambah query chunk tanpa filter owner.
+17. **Batas input ada di `src/limits.ts`.** Jangan menaikkan angka atau melewati `keyError` tanpa alasan; batas ini melindungi biaya dan memori Worker.
+18. **Penegakan sitasi bersifat menolak.** Sitasi yang tidak ada di `sources` → 422 `unsupported_citation`, bukan sekadar flag. Label konteks memakai `Konteks n (sumber)`, bukan `[n]`, agar tidak tertukar dengan sitasi.
 
 ## Konvensi kode
 
@@ -70,11 +79,12 @@ Jangan menaruh logika retrieval di `index.ts`; route hanya memanggil fungsi dari
 
 ## Testing
 
-Seam yang disepakati: **HTTP API** (`/ingest`, `/health`, `/search`), black-box, dijalankan terhadap `wrangler dev`. Test tidak boleh mengimpor modul internal atau memeriksa D1 secara langsung — semua lewat endpoint.
+Seam yang disepakati: **HTTP API** (`/ingest`, `/health`, `/search`, `/chat`, `/verify`), black-box, dijalankan terhadap `wrangler dev`. Test tidak boleh mengimpor modul internal atau memeriksa D1 secara langsung — semua lewat endpoint.
 
 - Tulis test merah dulu, baru perbaiki kode.
-- Jangan menguji jawaban LLM secara eksak; itu flaky. Uji perilaku yang deterministik (jumlah chunk, status code, filter, keberadaan ID).
+- Jangan menguji jawaban LLM secara eksak; itu flaky. Uji perilaku yang deterministik (jumlah chunk, status code, filter, keberadaan ID). Untuk `/chat`, uji kontraknya: 200 harus punya `grounded`, 422 harus `unsupported_citation`.
 - Propagasi Vectorize membuat beberapa assertion harus menunggu (`waitFor`), bukan `sleep` tetap. Hasil kosong saat menunggu bukan bukti: sertakan `hits.length > 0` di predicate, kalau tidak `every()` akan lolos secara vacuous.
+- File test dijalankan berurutan (`--test-concurrency=1`) karena semuanya memakai satu dev server dan korpus yang sama. Jangan menghapus flag itu tanpa mengganti state per test.
 - `npm test` membutuhkan dev server berjalan. Jika gagal karena koneksi, itu masalah setup, bukan kode.
 
 ## Alur verifikasi (wajib sebelum menyatakan selesai)

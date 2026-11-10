@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS chunks (
 	id          TEXT PRIMARY KEY,
+	owner       TEXT NOT NULL,
 	source      TEXT NOT NULL,
 	chunk_index INTEGER NOT NULL,
 	text        TEXT NOT NULL,
@@ -7,4 +8,4 @@ CREATE TABLE IF NOT EXISTS chunks (
 	created_at  INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);
+CREATE INDEX IF NOT EXISTS idx_chunks_owner ON chunks(owner, source);

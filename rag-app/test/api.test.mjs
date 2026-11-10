@@ -9,6 +9,16 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
 const BASE = process.env.BASE_URL ?? "http://localhost:8787";
+const TOKEN = process.env.API_TOKEN ?? "dev-token";
+const IP = `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
+
+function headers(extra = {}) {
+	return {
+		authorization: `Bearer ${TOKEN}`,
+		"cf-connecting-ip": IP,
+		...extra,
+	};
+}
 
 const SHRINK_KEY = "catatan/__test_shrink__.md";
 const IDEM_KEY = "catatan/__test_idem__.md";
@@ -31,7 +41,7 @@ function putDoc(key, text) {
 	try {
 		execFileSync(
 			WRANGLER,
-			["r2", "object", "put", `rag-docs/${key}`, "--file", path, "--local"],
+			["r2", "object", "put", `rag-docs/users/dev/${key}`, "--file", path, "--local"],
 			{ cwd: ROOT, stdio: "pipe" },
 		);
 	} finally {
@@ -42,14 +52,14 @@ function putDoc(key, text) {
 async function ingest(key) {
 	const res = await fetch(`${BASE}/ingest`, {
 		method: "POST",
-		headers: { "content-type": "application/json" },
+		headers: headers({ "content-type": "application/json" }),
 		body: JSON.stringify({ key }),
 	});
 	return { status: res.status, body: await res.json() };
 }
 
 async function health() {
-	const res = await fetch(`${BASE}/health`);
+	const res = await fetch(`${BASE}/health`, { headers: headers() });
 	return res.json();
 }
 
@@ -62,7 +72,7 @@ async function search(q, source) {
 	const url = new URL(`${BASE}/search`);
 	url.searchParams.set("q", q);
 	if (source) url.searchParams.set("source", source);
-	const res = await fetch(url);
+	const res = await fetch(url, { headers: headers() });
 	return res.json();
 }
 

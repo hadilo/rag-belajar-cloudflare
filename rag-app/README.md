@@ -10,7 +10,7 @@ R2 ──► chunk ──► bge-m3 ──► Vectorize
 pertanyaan ──► bge-m3 ──► query ─┘──► rerank ──► prompt ──► LLM ──► jawaban + sitasi
 ```
 
-**Status:** terverifikasi end-to-end pada 10 November 2026 — 5 chunk dari 4 dokumen, ingest idempoten, filter metadata, rerank, jawaban bersitasi, penolakan di luar korpus, dan streaming SSE. 4 test API hijau (`npm test`).
+**Status:** terverifikasi end-to-end pada 10 November 2026 — ingest idempoten, rekonsiliasi chunk yatim, filter metadata, rerank, jawaban bersitasi, penolakan di luar korpus, streaming SSE, auth, rate limit, batas input, penegakan sitasi, dan isolasi per pengguna. **22 test hijau** (`npm test`).
 
 ---
 
@@ -31,18 +31,24 @@ npx wrangler dev --port 8787
 Di terminal lain:
 
 ```bash
+TOKEN=dev-token   # sama dengan API_TOKEN di .dev.vars
+
 # 1. taruh dokumen contoh ke R2 lokal
-curl -X POST localhost:8787/seed
+curl -X POST localhost:8787/seed -H "authorization: Bearer $TOKEN"
 
 # 2. chunk + embed + indeks
 curl -X POST localhost:8787/ingest \
+  -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' -d '{"all":true}'
 
 # 3. tanya
 curl -s -X POST 'localhost:8787/chat?format=json' \
+  -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d '{"question":"Berapa dimensi bge-m3?"}'
 ```
+
+Semua endpoint kecuali `/` memerlukan header `authorization: Bearer <token>`. Token dipetakan ke pengguna lewat secret `API_TOKENS` (JSON `{"token":"user"}`; lokal di `.dev.vars`, produksi lewat `wrangler secret put API_TOKENS`).
 
 Keluaran yang diharapkan:
 
@@ -67,9 +73,10 @@ Keluaran yang diharapkan:
 | `POST` | `/seed` | Menulis 4 dokumen contoh ke R2 (`{ key: isi }`) |
 | `POST` | `/ingest` | `{"all":true}` atau `{"key":"catatan/x.md"}` |
 | `GET` | `/search?q=` | Retrieval + rerank; tambahkan `&source=` untuk filter metadata |
-| `POST` | `/chat` | Streaming SSE; tambahkan `?format=json` untuk jawaban JSON |
-| `GET` | `/debug/upsert?id=` | Uji upsert satu vektor (lokal) |
-| `GET` | `/debug/rrf?q=` | Uji fusi peringkat vektor + leksikal |
+| `POST` | `/chat` | Streaming SSE; `?format=json` untuk jawaban JSON yang diverifikasi |
+| `POST` | `/verify` | `{ answer, sources }` → `{ cited, invalid, grounded }` |
+| `GET` | `/debug/upsert?id=` | Uji upsert satu vektor (butuh `ENABLE_DEBUG=true`) |
+| `GET` | `/debug/rrf?q=` | Uji fusi peringkat vektor + leksikal (butuh `ENABLE_DEBUG=true`) |
 
 Contoh:
 
@@ -87,6 +94,21 @@ curl -N -X POST localhost:8787/chat \
   -H 'content-type: application/json' \
   -d '{"question":"Apa itu chunk overlap?"}'
 ```
+
+## Guardrails
+
+| Guardrail | Perilaku |
+|---|---|
+| Autentikasi | Semua endpoint kecuali `/` butuh `Authorization: Bearer <token>`. Token dipetakan ke pengguna lewat `API_TOKENS`; tanpa konfigurasi valid, server menolak (fail closed) |
+| Isolasi | Setiap pengguna punya namespace Vectorize sendiri dan baris D1 ber-`owner`. Pencarian, health, dan ingestion selalu dibatasi ke pemilik token |
+| Rate limit | 30 request/menit per IP, dihitung di Durable Object. Kelebihan → 429 + `retry-after` |
+| Batas input | Pertanyaan ≤ 2.000 karakter, query ≤ 500, key ≤ 200 dengan pola aman dan ekstensi yang diizinkan, file ≤ 5 MB. Pelanggaran → 413/400 |
+| Penegakan sitasi | Sitasi diperiksa terhadap sumber yang benar-benar terambil. Sitasi asing → 422 `unsupported_citation`, jawaban tidak disajikan. Streaming ditandai `x-grounding: unverified` |
+| Debug endpoint | `/debug/*` mengembalikan 404 kecuali `ENABLE_DEBUG=true` |
+| Biaya | `max_tokens: 512`, `temperature: 0.2`, 6 chunk per jawaban |
+| Aksi berisiko | Model tidak punya tool atau akses tulis |
+
+Belum ada: moderasi konten, audit log, rate limit per pengguna (saat ini per IP), dan enkripsi per pengguna di R2.
 
 ## Konfigurasi
 
@@ -111,13 +133,19 @@ Untuk produksi, aktifkan R2 di dashboard lalu ubah `DOCS` menjadi remote, dan ga
 ## Struktur
 
 ```
-rag-app/
+rag-belajar/
 ├── src/
-│   ├── index.ts      # routing + seed
+│   ├── index.ts      # routing + seed + guardrail berurutan
+│   ├── auth.ts       # token → pengguna, fail closed
+│   ├── ratelimit.ts  # Durable Object, fixed window
+│   ├── limits.ts     # batas panjang, key, ukuran file
+│   ├── grounding.ts  # parsing + kebijakan sitasi
+│   ├── ai.ts         # wrapper panggilan model + cast tipe
 │   ├── ingest.ts     # extract, chunkText, sha256, ingestDoc
-│   ├── search.ts     # embed, query, join D1, rerank, rrf
+│   ├── search.ts     # embedding query, join D1, rerank, RRF
 │   ├── chat.ts       # prompt, generation, verifikasi sitasi
 │   └── prompt.ts     # konstanta SYSTEM
+├── test/             # api, guardrails, grounding, limits, isolation
 ├── schema.sql
 ├── wrangler.jsonc
 └── AGENTS.md         # aturan untuk agen coding
@@ -134,9 +162,12 @@ rag-app/
 **Tambah dokumen**
 
 ```bash
-npx wrangler r2 object put rag-docs/catatan/buku.md --file ./buku.md --local
-curl -X POST localhost:8787/ingest -H 'content-type: application/json' -d '{"all":true}'
+npx wrangler r2 object put rag-docs/users/dev/catatan/buku.md --file ./buku.md --local
+curl -X POST localhost:8787/ingest -H "authorization: Bearer dev-token" \
+  -H 'content-type: application/json' -d '{"all":true}'
 ```
+
+Objek disimpan di `users/<pengguna>/<key>`; `key` logis tetap dipakai sebagai `source` di jawaban. Dokumen pengguna lain tidak terlihat lewat namespace Vectorize maupun filter `owner` di D1.
 
 Ingest bersifat rekonsiliasi: chunk yang tidak lagi dihasilkan dokumen (karena isinya menyusut atau chunking berubah) dihapus dari D1 dan Vectorize. Respons menyertakan `deleted` berisi jumlah chunk yang dibersihkan.
 
@@ -162,6 +193,10 @@ Dimensi terkunci, jadi ini migrasi: buat indeks baru → backfill seluruh korpus
 
 | Gejala | Penyebab | Perbaikan |
 |---|---|---|
+| `401 unauthorized` | Header token hilang atau salah | Kirim `authorization: Bearer <token>` sesuai `API_TOKENS` |
+| `413` pada chat/search | Pertanyaan atau query melebihi batas | Perpendek input; lihat `src/limits.ts` |
+| `422 unsupported_citation` | Model mengutip sumber di luar konteks | Periksa `/search`; jawaban sengaja tidak disajikan |
+| `429` | Rate limit per IP | Tunggu sesuai `retry-after` |
 | `/search` mengembalikan 0 hasil padahal ingest sukses | Mutasi Vectorize belum diproses | Tunggu 40–60 detik, ulangi |
 | Filter `source=` selalu kosong | Vektor di-upsert sebelum metadata index siap | Upsert ulang, tunggu ±1 menit |
 | Jawaban memakai isi dokumen lama | Chunk yatim dari versi sebelumnya | Ingest ulang; rekonsiliasi menghapusnya |

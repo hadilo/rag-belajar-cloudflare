@@ -1,5 +1,8 @@
-import { ingestDoc, ObjectNotFoundError } from "./ingest";
+import { ingestDoc, ObjectNotFoundError, PayloadTooLargeError } from "./ingest";
 import { embed } from "./ai";
+import { authenticate } from "./auth";
+import { assessAnswer } from "./grounding";
+import { MAX_QUESTION_CHARS, MAX_QUERY_CHARS, keyError } from "./limits";
 import { search, rrf, lexicalRank } from "./search";
 import { answer, streamAnswer } from "./chat";
 
@@ -47,6 +50,27 @@ function json(data: unknown, status = 200): Response {
 	});
 }
 
+async function rateLimit(env: Env, request: Request): Promise<Response | null> {
+	const limit = Number(env.RATE_LIMIT_PER_MINUTE ?? "30");
+	const key = request.headers.get("cf-connecting-ip") ?? "local";
+	const id = env.LIMITER.idFromName(key);
+
+	const res = await env.LIMITER.get(id).fetch(
+		`https://limiter/?limit=${limit}&window=60000`,
+	);
+	const body = await res.json<{ allowed: boolean; retryAfter: number }>();
+
+	if (body.allowed) return null;
+
+	return new Response(JSON.stringify({ error: "rate limit exceeded" }), {
+		status: 429,
+		headers: {
+			"content-type": "application/json; charset=utf-8",
+			"retry-after": String(body.retryAfter),
+		},
+	});
+}
+
 export default {
 	async fetch(request, env): Promise<Response> {
 		const url = new URL(request.url);
@@ -60,10 +84,23 @@ export default {
 				});
 			}
 
+			const identity = authenticate(request, env);
+			if (identity instanceof Response) return identity;
+			const user = identity.user;
+
+			const limited = await rateLimit(env, request);
+			if (limited) return limited;
+
+			if (path.startsWith("/debug/") && env.ENABLE_DEBUG !== "true") {
+				return json({ error: "not found" }, 404);
+			}
+
 			if (path === "/health" && request.method === "GET") {
 				const { results } = await env.DB.prepare(
-					"SELECT source, COUNT(*) AS n FROM chunks GROUP BY source",
-				).all<{ source: string; n: number }>();
+					"SELECT source, COUNT(*) AS n FROM chunks WHERE owner = ? GROUP BY source",
+				)
+					.bind(user)
+					.all<{ source: string; n: number }>();
 
 				const total = results.reduce((a, r) => a + r.n, 0);
 				return json({ ok: true, chunks: total, bySource: results });
@@ -71,7 +108,7 @@ export default {
 
 			if (path === "/seed" && request.method === "POST") {
 				for (const [key, body] of Object.entries(SEED)) {
-					await env.DOCS.put(key, body);
+					await env.DOCS.put(`users/${user}/${key}`, body);
 				}
 				return json({ seeded: Object.keys(SEED) });
 			}
@@ -83,23 +120,34 @@ export default {
 				};
 
 				if (body.all) {
-					const list = await env.DOCS.list();
+					const prefix = `users/${user}/`;
+					const list = await env.DOCS.list({ prefix });
 					const results = [];
 					for (const obj of list.objects) {
-						results.push(await ingestDoc(env, obj.key));
+						const key = obj.key.slice(prefix.length);
+						try {
+							results.push(await ingestDoc(env, user, key));
+						} catch (err) {
+							results.push({ key, error: String(err) });
+						}
 					}
 					return json({ results });
 				}
 
 				if (!body.key) return json({ error: "kirim { key } atau { all: true }" }, 400);
 
-				return json(await ingestDoc(env, body.key));
+				const invalidKey = keyError(body.key);
+				if (invalidKey) return json({ error: invalidKey }, 400);
+
+				return json(await ingestDoc(env, user, body.key));
 			}
 
 			if (path === "/debug/upsert" && request.method === "GET") {
 				const id = url.searchParams.get("id") ?? "debug-1";
 				const [vector] = await embed(env, ["tes vektor"]);
-				const res = await env.INDEX.upsert([{ id, values: vector, metadata: { source: "debug" } }]);
+				const res = await env.INDEX.upsert([
+					{ id, values: vector, namespace: user, metadata: { source: "debug", owner: user } },
+				]);
 				return json({ id, dimensions: vector.length, res });
 			}
 
@@ -107,7 +155,7 @@ export default {
 				const q = url.searchParams.get("q");
 				if (!q) return json({ error: "parameter q wajib" }, 400);
 
-				const result = await search(env, q);
+				const result = await search(env, user, q);
 				const vectorIds = result.hits.map((h) => h.id);
 				const lexicalIds = lexicalRank(q, result.hits);
 				return json({ q, vectorIds, lexicalIds, fused: rrf([vectorIds, lexicalIds]) });
@@ -116,9 +164,12 @@ export default {
 			if (path === "/search" && request.method === "GET") {
 				const q = url.searchParams.get("q");
 				if (!q) return json({ error: "parameter q wajib" }, 400);
+				if (q.length > MAX_QUERY_CHARS) {
+					return json({ error: "query_too_long", max: MAX_QUERY_CHARS }, 413);
+				}
 
 				const source = url.searchParams.get("source") ?? undefined;
-				const result = await search(env, q, 20, 6, { source });
+				const result = await search(env, user, q, 20, 6, { source });
 				return json({
 					question: q,
 					filter: source ? { source } : null,
@@ -135,15 +186,43 @@ export default {
 				});
 			}
 
+			if (path === "/verify" && request.method === "POST") {
+				const body = (await request.json().catch(() => ({}))) as {
+					answer?: string;
+					sources?: string[];
+				};
+
+				if (typeof body.answer !== "string" || !Array.isArray(body.sources)) {
+					return json({ error: "kirim { answer, sources }" }, 400);
+				}
+
+				return json(assessAnswer(body.answer, body.sources));
+			}
+
 			if (path === "/chat" && request.method === "POST") {
 				const { question } = (await request.json()) as { question?: string };
 				if (!question) return json({ error: "question wajib" }, 400);
+				if (question.length > MAX_QUESTION_CHARS) {
+					return json({ error: "question_too_long", max: MAX_QUESTION_CHARS }, 413);
+				}
 
-				const { hits } = await search(env, question);
+				const { hits } = await search(env, user, question);
 				const sources = [...new Set(hits.map((h) => h.source))];
 
 				if (url.searchParams.get("format") === "json") {
 					const result = await answer(env, question, hits);
+
+					if (result.invalid.length > 0) {
+						return json(
+							{
+								error: "unsupported_citation",
+								invalid: result.invalid,
+								sources: result.sources,
+							},
+							422,
+						);
+					}
+
 					return json({ question, ...result });
 				}
 
@@ -154,6 +233,7 @@ export default {
 						"content-type": "text/event-stream",
 						"cache-control": "no-cache",
 						"x-sources": sources.join(","),
+						"x-grounding": "unverified",
 					},
 				});
 			}
@@ -163,7 +243,12 @@ export default {
 			if (err instanceof ObjectNotFoundError) {
 				return json({ error: err.message }, 404);
 			}
+			if (err instanceof PayloadTooLargeError) {
+				return json({ error: err.message }, 413);
+			}
 			return json({ error: String(err) }, 500);
 		}
 	},
 } satisfies ExportedHandler<Env>;
+
+export { RateLimiter } from "./ratelimit";
