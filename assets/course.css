@@ -250,6 +250,7 @@ figcaption {
 }
 
 .diagram .box { fill: var(--box); stroke: var(--rule); stroke-width: 1.2; }
+.diagram .arrow-path { fill: var(--muted); }
 .diagram .box-accent { fill: var(--accent-soft); stroke: color-mix(in srgb, var(--accent) 45%, transparent); stroke-width: 1.4; }
 .diagram .label { fill: var(--ink); font-family: var(--sans); font-size: 12.5px; font-weight: 600; }
 .diagram .sub { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; }
@@ -360,9 +361,9 @@ details p:last-child, details ul:last-child { margin-bottom: 0; }
 	transition: border-color 120ms ease, background 120ms ease;
 }
 
-.opt:hover:not(:disabled) { border-color: var(--muted); }
+.opt:hover:not([aria-disabled="true"]) { border-color: var(--muted); }
 
-.opt:disabled { cursor: default; opacity: 1; }
+.opt[aria-disabled="true"] { cursor: default; opacity: 1; }
 
 .opt.correct { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
 
@@ -452,6 +453,9 @@ details p:last-child, details ul:last-child { margin-bottom: 0; }
 	table { font-size: 0.75rem; }
 	th, td { overflow-wrap: anywhere; }
 	.card { padding: 0.8rem 0.85rem; }
+	/* Diagram punya viewBox 840px; tanpa ini teksnya jadi tak terbaca. */
+	figure.diagram { overflow-x: auto; }
+	figure.diagram svg { min-width: 34rem; }
 }
 
 /* ---------- Print ---------- */
@@ -473,5 +477,6 @@ details p:last-child, details ul:last-child { margin-bottom: 0; }
 	details { border: 0; padding: 0; }
 	details[open] summary { display: none; }
 	.opt { border: 1px solid #999; }
+	.opt[aria-disabled="true"] { cursor: default; }
 	.opt.correct { border: 2px solid #000; }
 }

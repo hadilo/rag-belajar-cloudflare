@@ -25,6 +25,7 @@
 
 		var score = document.createElement("p");
 		score.className = "quiz-score";
+		score.setAttribute("role", "status");
 		score.textContent = "0 / " + questions.length + " benar";
 		quiz.appendChild(score);
 
@@ -33,7 +34,11 @@
 			var explanation = q.getAttribute("data-explain") || "";
 			var options = Array.prototype.slice.call(q.querySelectorAll(".opt"));
 
+			q.setAttribute("role", "group");
+
 			options.forEach(function (opt, index) {
+				opt.setAttribute("aria-pressed", "false");
+
 				opt.addEventListener("click", function () {
 					if (q.dataset.done) return;
 					q.dataset.done = "1";
@@ -43,7 +48,8 @@
 					if (isCorrect) correct += 1;
 
 					options.forEach(function (o, i) {
-						o.disabled = true;
+						o.setAttribute("aria-disabled", "true");
+						o.setAttribute("aria-pressed", i === index ? "true" : "false");
 						if (i === answerIndex) o.classList.add("correct");
 						else if (i === index) o.classList.add("wrong");
 						else o.classList.add("faded");
