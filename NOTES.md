@@ -64,6 +64,13 @@ Kapan sebaiknya pindah: setelah harness sesi 6 ada, A/B keduanya pada golden set
 
 Catatan teknis qwen3-embedding: pakai jalur `queries` (dengan `instruction`) untuk pertanyaan dan `documents` untuk chunk; kalau keduanya di-embed lewat `text`, kamu kehilangan keunggulan instruksi dan perbandingannya jadi tidak adil.
 
+## Temuan dari menjalankan kode (Nov 2026)
+Semua jalur sesi 2–5 dijalankan end-to-end di `rag-app/`. Yang berbeda dari asumsi materi:
+- Propagasi Vectorize ±40–60 detik, bukan "beberapa detik" seperti tertulis di dokumentasi. Jangan menyimpulkan upsert gagal terlalu cepat.
+- Metadata filter: vektor yang di-upsert sebelum metadata index siap mengembalikan 0 hasil; setelah re-upsert dan propagasi ±1 menit, filter bekerja. Urutan dan kesabaran dua-duanya wajib.
+- Reranker mengembalikan `{ id, score }` dengan `id` = indeks `contexts` — sudah dikonfirmasi, bukan lagi caveat.
+- R2 tidak bisa dipakai remote sebelum diaktifkan di dashboard; binding lokal tetap jalan.
+
 ## Konvensi materi
 - Setiap blok kode **wajib** punya label nama file lewat `<pre data-file="...">`, ditampilkan oleh CSS `pre[data-file]::before`.
 - Blok yang bukan file diberi label jujur: `terminal` (perintah shell), `respons` (contoh keluaran), `rumus` (notasi).

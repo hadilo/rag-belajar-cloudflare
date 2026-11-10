@@ -159,6 +159,7 @@ npx wrangler vectorize create-metadata-index rag-index \
 <div class="warn">
 	<span class="label">Urutan yang tidak bisa dibalik</span>
 	<p>Metadata index harus dibuat <strong>sebelum</strong> vektor di-upsert. Vektor yang masuk sebelum metadata index ada tidak akan bisa difilter; satu-satunya perbaikan adalah meng-upsert ulang semuanya.</p>
+	<p>Beri waktu. Propagasi Vectorize bisa sampai semenit, dan vektor hasil upsert ulang baru bisa difilter setelah propagasi itu selesai.</p>
 </div>
 
 <p>String yang bisa difilter hanya 64 byte pertama. Simpan <code>source</code> sebagai path pendek (<code>catatan/rag.md</code>), bukan URL panjang.</p>

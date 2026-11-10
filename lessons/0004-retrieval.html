@@ -104,8 +104,8 @@ const top = response
 <p>Biayanya $0,003 per juta token — untuk 20 chunk pendek, praktis nol. Waktu tambahannya ratusan milidetik. Itu trade-off yang hampir selalu layak.</p>
 
 <div class="note">
-	<span class="label">Periksa sekali</span>
-	<p>Bentuk item respons bisa berbeda antar model. Jalankan sekali dengan <code>console.log(response)</code> dan pastikan field-nya sebelum mengandalkan pemetaan di atas.</p>
+	<span class="label">Bentuk respons (sudah diuji)</span>
+	<p>Responsnya array objek <code>{ id, score }</code>, dengan <code>id</code> sebagai indeks pada array <code>contexts</code>. Contoh nyata: <code>{ "id": 0, "score": 0.9982 }</code>.</p>
 </div>
 
 <h2>5 · Hybrid search: saat kemiripan makna tidak cukup</h2>
