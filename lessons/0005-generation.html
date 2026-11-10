@@ -28,7 +28,7 @@
 
 <p>Model generasi secara default membantu: ia ingin menjawab. Dorongan itu harus dilawan dengan instruksi eksplisit, bukan dengan harapan.</p>
 
-<pre><code>const SYSTEM = `Kamu adalah asisten yang menjawab pertanyaan tentang dokumen pribadi pengguna.
+<pre data-file="src/prompt.ts"><code>const SYSTEM = `Kamu adalah asisten yang menjawab pertanyaan tentang dokumen pribadi pengguna.
 
 ATURAN:
 1. Jawab HANYA berdasarkan KONTEKS yang diberikan.
@@ -44,7 +44,7 @@ ATURAN:
 
 <h2>2 · Menyusun konteks</h2>
 
-<pre><code>const context = top
+<pre data-file="src/chat.ts"><code>const context = top
 	.map((c, i) =&gt; `[${i + 1}] sumber: ${c.source}\n${c.text}`)
 	.join("\n\n");
 
@@ -69,7 +69,7 @@ const messages = [
 
 <p>Latency terasa berbeda tergantung kapan kata pertama muncul. Streaming mengubah "menunggu 4 detik" menjadi "mulai membaca dalam 0,8 detik".</p>
 
-<pre><code>const stream = await env.AI.run("@cf/qwen/qwen3-30b-a3b-fp8", {
+<pre data-file="src/chat.ts"><code>const stream = await env.AI.run("@cf/qwen/qwen3-30b-a3b-fp8", {
 	messages,
 	stream: true,
 	max_tokens: 512,
@@ -89,7 +89,7 @@ return new Response(stream, {
 
 <p>Jangan percaya model soal sitasi. Ia bisa menyebut file yang tidak pernah masuk konteks, atau lupa menyebut sama sekali. Dua pemeriksaan murah menutup sebagian besar celah:</p>
 
-<pre><code>const allowed = new Set(top.map((c) =&gt; c.source));
+<pre data-file="src/chat.ts"><code>const allowed = new Set(top.map((c) =&gt; c.source));
 const cited = [...answer.matchAll(/\[([^\]]+)\]/g)]
 	.map((m) =&gt; m[1].trim());
 
@@ -117,7 +117,7 @@ const hasCitation = cited.length &gt; 0;</code></pre>
 
 <h2>6 · Parameter dan model</h2>
 
-<pre><code>{
+<pre data-file="src/chat.ts"><code>{
 	temperature: 0.2,   // RAG butuh patuh, bukan kreatif
 	max_tokens: 512,    // batasi biaya output
 	top_p: 0.9

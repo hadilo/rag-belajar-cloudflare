@@ -42,7 +42,7 @@
 
 <p>Cukup satu file Node, tanpa dependency. Isi <code>cases</code> dari <code>eval/questions.md</code>.</p>
 
-<pre><code>const BASE = process.env.BASE_URL;
+<pre data-file="scripts/eval.mjs"><code>const BASE = process.env.BASE_URL;
 
 const cases = [
 	{ q: "Apa itu chunk overlap?", source: "catatan/rag.md" },
@@ -113,7 +113,7 @@ console.log("mrr:", mrr(ranks));</code></pre>
 
 <h2>4 · Biaya: rumus dan angka nyata</h2>
 
-<pre><code>biaya = (token_input × harga_input + token_output × harga_output) / 1.000.000</code></pre>
+<pre data-file="rumus"><code>biaya = (token_input × harga_input + token_output × harga_output) / 1.000.000</code></pre>
 
 <p>Asumsi: 6 chunk × 400 token = 2.400 token konteks, 300 token instruksi + riwayat, output 300 token. Total input ≈ 2.700 token.</p>
 
@@ -140,7 +140,7 @@ console.log("mrr:", mrr(ranks));</code></pre>
 
 <p>Agar biaya bisa diatribusikan, lewatkan panggilan model melalui gateway dan sertakan metadata:</p>
 
-<pre><code>const res = await env.AI.run(model, input, {
+<pre data-file="src/chat.ts"><code>const res = await env.AI.run(model, input, {
 	gateway: {
 		id: "rag",
 		metadata: { experiment: "rerank-on", question_id: id },

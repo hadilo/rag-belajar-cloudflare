@@ -26,7 +26,7 @@
 
 <h2>1 · Satu embedding, satu query</h2>
 
-<pre><code>const { data } = await env.AI.run("@cf/baai/bge-m3", {
+<pre data-file="src/search.ts"><code>const { data } = await env.AI.run("@cf/baai/bge-m3", {
 	text: [question],
 });
 
@@ -43,7 +43,7 @@ const { matches } = await env.INDEX.query(data[0], {
 
 <p>Vectorize mengembalikan ID dan skor, bukan teks. Teksnya ada di D1. Jebakan kecil: <code>WHERE id IN (...)</code> tidak menjamin urutan hasil, jadi urutkan ulang berdasarkan skor dari Vectorize.</p>
 
-<pre><code>const ids = matches.map((m) =&gt; m.id);
+<pre data-file="src/search.ts"><code>const ids = matches.map((m) =&gt; m.id);
 const placeholders = ids.map(() =&gt; "?").join(",");
 
 const { results } = await env.DB.prepare(
@@ -63,7 +63,7 @@ const candidates = matches
 
 <p>Filter menyempitkan kandidat <strong>sebelum</strong> top-K dihitung. Artinya filter bukan sekadar kosmetik: ia mengubah chunk mana yang bisa menang.</p>
 
-<pre><code>const { matches } = await env.INDEX.query(data[0], {
+<pre data-file="src/search.ts"><code>const { matches } = await env.INDEX.query(data[0], {
 	topK: 20,
 	returnMetadata: "all",
 	filter: { source: { $in: ["catatan/rag.md", "catatan/cloudflare.md"] } },
@@ -89,7 +89,7 @@ const candidates = matches
 
 <p>Karena itu polanya selalu dua tahap: ambil banyak dengan cara murah, saring dengan cara mahal.</p>
 
-<pre><code>const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
+<pre data-file="src/search.ts"><code>const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
 	query: question,
 	contexts: candidates.map((c) =&gt; ({ text: c.text })),
 	top_k: 6,
@@ -113,7 +113,7 @@ const top = response
 
 <p>Solusinya menggabungkan dua daftar peringkat. Cara paling sederhana dan tahan banting: <em>reciprocal rank fusion</em>.</p>
 
-<pre><code>function rrf(lists: string[][], k = 60) {
+<pre data-file="src/search.ts"><code>function rrf(lists: string[][], k = 60) {
 	const scores = new Map&lt;string, number&gt;();
 	for (const list of lists) {
 		list.forEach((id, i) =&gt; {

@@ -39,7 +39,7 @@
 
 <p><code>env.AI.toMarkdown()</code> menerima file dan mengembalikan markdown beserta perkiraan jumlah token. Untuk PDF hasil scan ia menjalankan OCR; untuk gambar, model vision mengekstrak teksnya.</p>
 
-<pre><code>async function extract(env: Env, key: string) {
+<pre data-file="src/ingest.ts"><code>async function extract(env: Env, key: string) {
 	const obj = await env.DOCS.get(key);
 	if (!obj) throw new Error(`Tidak ada objek: ${key}`);
 
@@ -61,7 +61,7 @@
 
 <p>Tujuannya bukan memotong serapi mungkin, tapi memastikan setiap chunk <em>berdiri sendiri</em> saat muncul di prompt tanpa konteks sekitarnya.</p>
 
-<pre><code>function chunkText(text: string, size = 1200, overlap = 200): string[] {
+<pre data-file="src/ingest.ts"><code>function chunkText(text: string, size = 1200, overlap = 200): string[] {
 	const paragraphs = text
 		.split(/\n{2,}/)
 		.map((p) =&gt; p.trim())
@@ -92,7 +92,7 @@
 
 <h2>4 · Identitas yang stabil</h2>
 
-<pre><code>async function sha256(text: string) {
+<pre data-file="src/ingest.ts"><code>async function sha256(text: string) {
 	const digest = await crypto.subtle.digest(
 		"SHA-256",
 		new TextEncoder().encode(text),
@@ -104,7 +104,7 @@
 
 <p>ID vektor: <code>${source}#${i}</code>. Stabil antar-run, jadi <code>upsert</code> menggantikan vektor lama alih-alih menambah duplikat. Hash isi disimpan di D1 untuk melewati chunk yang tidak berubah:</p>
 
-<pre><code>const hash = await sha256(text);
+<pre data-file="src/ingest.ts"><code>const hash = await sha256(text);
 const existing = await env.DB
 	.prepare("SELECT hash FROM chunks WHERE id = ?")
 	.bind(id)
@@ -116,7 +116,7 @@ if (existing?.hash === hash) return null; // tidak perlu di-embed ulang</code></
 
 <h2>5 · Skema D1 dan indeks vektor</h2>
 
-<pre><code>CREATE TABLE IF NOT EXISTS chunks (
+<pre data-file="schema.sql"><code>CREATE TABLE IF NOT EXISTS chunks (
 	id          TEXT PRIMARY KEY,
 	source      TEXT NOT NULL,
 	chunk_index INTEGER NOT NULL,
@@ -127,7 +127,7 @@ if (existing?.hash === hash) return null; // tidak perlu di-embed ulang</code></
 
 CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
 
-<pre><code>npx wrangler d1 create rag
+<pre data-file="terminal"><code>npx wrangler d1 create rag
 npx wrangler r2 bucket create rag-docs
 npx wrangler vectorize create rag-index --dimensions=1024 --metric=cosine
 npx wrangler vectorize create-metadata-index rag-index \
@@ -144,7 +144,7 @@ npx wrangler vectorize create-metadata-index rag-index \
 
 <p>Ingestion tidak boleh berjalan di dalam request handler. Workers Free hanya memberi 10 ms CPU per request, dan meng-embed ratusan chunk butuh waktu. Workflow memberi kamu langkah-langkah yang tahan gagal: kalau langkah ke-7 mati, langkah 1–6 tidak diulang.</p>
 
-<pre><code>import { WorkflowEntrypoint } from "cloudflare:workers";
+<pre data-file="src/ingest.ts"><code>import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 
 export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&gt; {
@@ -200,7 +200,7 @@ export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&g
 
 <p>Picu dari route kecil:</p>
 
-<pre><code>app.post("/ingest", async (c) =&gt; {
+<pre data-file="src/index.ts"><code>app.post("/ingest", async (c) =&gt; {
 	const { key } = await c.req.json&lt;{ key: string }&gt;();
 	if (!key) return c.text("key wajib", 400);
 

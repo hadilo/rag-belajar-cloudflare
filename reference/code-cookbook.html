@@ -17,11 +17,28 @@
 
 <div class="kicker">Referensi kode · cetak &amp; tempel</div>
 <h1>Cookbook RAG di Cloudflare</h1>
-<p class="lede">Semua potongan kode yang dipakai sepanjang seri, dalam satu halaman. Disusun menurut urutan pipeline, bukan urutan sesi.</p>
+<p class="lede">Semua potongan kode yang dipakai sepanjang seri, dalam satu halaman. Disusun menurut urutan pipeline, bukan urutan sesi. Setiap blok diberi nama file tujuannya.</p>
+
+<h2>0 · Struktur project</h2>
+
+<pre data-file="struktur project"><code>rag-belajar/
+├── src/
+│   ├── index.ts      # route Hono + export ulang IngestWorkflow
+│   ├── ingest.ts     # extract(), chunkText(), IngestWorkflow
+│   ├── search.ts     # embedding query, join D1, rerank, RRF
+│   ├── chat.ts       # prompt, generation, verifikasi sitasi
+│   └── prompt.ts     # konstanta SYSTEM
+├── scripts/
+│   └── eval.mjs      # harness evaluasi
+├── schema.sql
+├── wrangler.jsonc
+└── worker-configuration.d.ts   # hasil `wrangler types`</code></pre>
+
+<p class="small">Nama file di label mengikuti struktur ini. <code>terminal</code> berarti perintah shell, <code>respons</code> berarti contoh keluaran, <code>rumus</code> berarti notasi.</p>
 
 <h2>1 · Konfigurasi</h2>
 
-<pre><code>{
+<pre data-file="wrangler.jsonc"><code>{
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "rag-belajar",
   "main": "src/index.ts",
@@ -54,7 +71,7 @@
 
 <h2>2 · Perintah setup</h2>
 
-<pre><code>npx wrangler login
+<pre data-file="terminal"><code>npx wrangler login
 npx wrangler d1 create rag
 npx wrangler r2 bucket create rag-docs
 npx wrangler vectorize create rag-index --dimensions=1024 --metric=cosine
@@ -70,7 +87,7 @@ npx wrangler deploy</code></pre>
 
 <h2>3 · Skema D1</h2>
 
-<pre><code>CREATE TABLE IF NOT EXISTS chunks (
+<pre data-file="schema.sql"><code>CREATE TABLE IF NOT EXISTS chunks (
   id          TEXT PRIMARY KEY,
   source      TEXT NOT NULL,
   chunk_index INTEGER NOT NULL,
@@ -83,7 +100,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
 
 <h2>4 · Embedding</h2>
 
-<pre><code>const { data, shape } = await env.AI.run("@cf/baai/bge-m3", {
+<pre data-file="src/ingest.ts"><code>const { data, shape } = await env.AI.run("@cf/baai/bge-m3", {
   text: ["satu string", "atau array string"],
 });
 // shape: [jumlah input, 1024]
@@ -91,7 +108,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
 
 <h2>5 · Chunking</h2>
 
-<pre><code>function chunkText(text: string, size = 1200, overlap = 200): string[] {
+<pre data-file="src/ingest.ts"><code>function chunkText(text: string, size = 1200, overlap = 200): string[] {
   const paragraphs = text.split(/\n{2,}/).map((p) =&gt; p.trim()).filter(Boolean);
   const chunks: string[] = [];
   let buf = "";
@@ -109,7 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
 
 <h2>6 · Ekstraksi</h2>
 
-<pre><code>const obj = await env.DOCS.get(key);
+<pre data-file="src/ingest.ts"><code>const obj = await env.DOCS.get(key);
 if (!obj) throw new Error(`Tidak ada objek: ${key}`);
 
 const [result] = await env.AI.toMarkdown({
@@ -122,7 +139,7 @@ const text = result.data;</code></pre>
 
 <h2>7 · Ingestion (Workflow)</h2>
 
-<pre><code>import { WorkflowEntrypoint } from "cloudflare:workers";
+<pre data-file="src/ingest.ts"><code>import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 
 export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&gt; {
@@ -165,7 +182,7 @@ export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&g
 
 <h2>8 · Query</h2>
 
-<pre><code>const { data } = await env.AI.run("@cf/baai/bge-m3", { text: [question] });
+<pre data-file="src/search.ts"><code>const { data } = await env.AI.run("@cf/baai/bge-m3", { text: [question] });
 
 const { matches } = await env.INDEX.query(data[0], {
   topK: 20,
@@ -177,7 +194,7 @@ const { matches } = await env.INDEX.query(data[0], {
 
 <h2>9 · Ambil teks, jaga urutan</h2>
 
-<pre><code>const ids = matches.map((m) =&gt; m.id);
+<pre data-file="src/search.ts"><code>const ids = matches.map((m) =&gt; m.id);
 const placeholders = ids.map(() =&gt; "?").join(",");
 
 const { results } = await env.DB.prepare(
@@ -192,7 +209,7 @@ const candidates = matches
 
 <h2>10 · Rerank</h2>
 
-<pre><code>const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
+<pre data-file="src/search.ts"><code>const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
   query: question,
   contexts: candidates.map((c) =&gt; ({ text: c.text })),
   top_k: 6,
@@ -204,7 +221,7 @@ const top = response
 
 <h2>11 · Fusion (hybrid)</h2>
 
-<pre><code>function rrf(lists: string[][], k = 60): [string, number][] {
+<pre data-file="src/search.ts"><code>function rrf(lists: string[][], k = 60): [string, number][] {
   const scores = new Map&lt;string, number&gt;();
   for (const list of lists) {
     list.forEach((id, i) =&gt; {
@@ -216,7 +233,7 @@ const top = response
 
 <h2>12 · Generation</h2>
 
-<pre><code>const context = top
+<pre data-file="src/chat.ts"><code>const context = top
   .map((c, i) =&gt; `[${i + 1}] sumber: ${c.source}\n${c.text}`)
   .join("\n\n");
 
@@ -241,13 +258,13 @@ return new Response(stream, {
 
 <h2>13 · Verifikasi sitasi</h2>
 
-<pre><code>const allowed = new Set(top.map((c) =&gt; c.source));
+<pre data-file="src/chat.ts"><code>const allowed = new Set(top.map((c) =&gt; c.source));
 const cited = [...answer.matchAll(/\[([^\]]+)\]/g)].map((m) =&gt; m[1]);
 const invalid = [...new Set(cited)].filter((s) =&gt; !allowed.has(s));</code></pre>
 
 <h2>14 · Gateway</h2>
 
-<pre><code>const res = await env.AI.run(model, input, {
+<pre data-file="src/chat.ts"><code>const res = await env.AI.run(model, input, {
   gateway: {
     id: "rag",
     metadata: { experiment: "rerank-on", question_id: id },
@@ -260,7 +277,7 @@ const logId = env.AI.aiGatewayLogId;</code></pre>
 
 <h2>15 · Hapus satu sumber</h2>
 
-<pre><code>const { results } = await env.DB
+<pre data-file="src/ingest.ts"><code>const { results } = await env.DB
   .prepare("SELECT id FROM chunks WHERE source = ?")
   .bind(source)
   .all();

@@ -64,7 +64,7 @@
 
 <h3>Hapus</h3>
 
-<pre><code>async function deleteSource(env: Env, source: string) {
+<pre data-file="src/ingest.ts"><code>async function deleteSource(env: Env, source: string) {
 	const { results } = await env.DB
 		.prepare("SELECT id FROM chunks WHERE source = ?")
 		.bind(source)
@@ -84,7 +84,7 @@
 
 <p>R2 bisa memicu <a href="https://developers.cloudflare.com/r2/buckets/event-notifications/">event notification</a> ke Queue setiap ada objek baru. Consumer-nya cukup memanggil Workflow ingestion. Dengan begitu, alur kerjamu menjadi: taruh file di R2, tunggu, lalu tanya.</p>
 
-<pre><code>export default {
+<pre data-file="src/index.ts"><code>export default {
 	async queue(batch: MessageBatch&lt;{ object: { key: string } }&gt;, env: Env) {
 		for (const msg of batch.messages) {
 			await env.INGEST.create({ params: { key: msg.body.object.key } });
