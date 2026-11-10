@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sesi 3 — Memasukkan korpus: chunk, ID, dan idempotensi</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="page">
+
+<nav class="crumbs">
+	<a href="../index.html">Daftar sesi</a> · Sesi 3 ·
+	<a href="../reference/rag-pipeline-map.html">Cheat sheet</a>
+</nav>
+
+<div class="kicker">Sesi 3 · index-time</div>
+<h1>Memasukkan korpus: chunk, ID, dan idempotensi</h1>
+<p class="lede">Retrieval yang bagus dimulai dari data yang rapi. Sesi ini mengubah folder dokumen menjadi indeks yang bisa di-query — dan yang bisa dijalankan ulang tanpa menduplikasi apa pun.</p>
+
+<p class="meta">
+	<span>±15 menit</span>
+	<span>Prasyarat: Sesi 2</span>
+	<span>Hasil: korpus sendiri terindeks</span>
+</p>
+
+<h2>1 · Tiga keputusan sebelum menulis kode</h2>
+
+<table>
+<thead><tr><th>Keputusan</th><th>Pilihan kita</th><th>Kenapa</th></tr></thead>
+<tbody>
+<tr><td>Ekstraksi</td><td><code>env.AI.toMarkdown()</code></td><td>PDF dan gambar jadi teks terstruktur tanpa library parser di Worker</td></tr>
+<tr><td>Pemotongan</td><td>Recursive per paragraf, 1.200 karakter, overlap 200</td><td>Menjaga batas alami teks; chunk terlalu kecil kehilangan konteks</td></tr>
+<tr><td>Identitas</td><td><code>source#index</code> + hash isi</td><td>Upsert menggantikan, bukan menambah; isi tak berubah tidak di-embed ulang</td></tr>
+</tbody>
+</table>
+
+<h2>2 · Ekstraksi</h2>
+
+<p><code>env.AI.toMarkdown()</code> menerima file dan mengembalikan markdown beserta perkiraan jumlah token. Untuk PDF hasil scan ia menjalankan OCR; untuk gambar, model vision mengekstrak teksnya.</p>
+
+<pre><code>async function extract(env: Env, key: string) {
+	const obj = await env.DOCS.get(key);
+	if (!obj) throw new Error(`Tidak ada objek: ${key}`);
+
+	const [result] = await env.AI.toMarkdown({
+		name: key,
+		blob: new Blob([await obj.arrayBuffer()]),
+	});
+
+	if (result.format === "error") throw new Error(result.error);
+	return result.data;
+}</code></pre>
+
+<div class="note">
+	<span class="label">Kenapa R2 dulu</span>
+	<p>File asli adalah sumber kebenaran. Kalau chunking-mu berubah, kamu tidak perlu meminta dokumen lagi ke pengguna — cukup baca ulang dari R2. Menyimpan hasil ekstraksi saja berarti kamu tidak bisa memperbaiki ekstraksi di masa depan.</p>
+</div>
+
+<h2>3 · Chunking</h2>
+
+<p>Tujuannya bukan memotong serapi mungkin, tapi memastikan setiap chunk <em>berdiri sendiri</em> saat muncul di prompt tanpa konteks sekitarnya.</p>
+
+<pre><code>function chunkText(text: string, size = 1200, overlap = 200): string[] {
+	const paragraphs = text
+		.split(/\n{2,}/)
+		.map((p) =&gt; p.trim())
+		.filter(Boolean);
+
+	const chunks: string[] = [];
+	let buf = "";
+
+	for (const p of paragraphs) {
+		if (buf.length &gt; 0 &amp;&amp; buf.length + p.length + 2 &gt; size) {
+			chunks.push(buf.trim());
+			buf = buf.slice(Math.max(0, buf.length - overlap)).trim() + "\n\n";
+		}
+		buf += p + "\n\n";
+	}
+	if (buf.trim()) chunks.push(buf.trim());
+	return chunks;
+}</code></pre>
+
+<p>Ukuran dihitung dalam karakter, bukan token. Untuk teks Indonesia, satu token kira-kira 3–4 karakter, jadi 1.200 karakter ≈ 300–400 token. Itu rentang yang aman: cukup untuk satu argumen utuh, cukup kecil untuk tidak membanjiri prompt.</p>
+
+<p>Overlap 200 karakter menyelamatkan kalimat yang terpotong di batas chunk. Overlap terlalu besar membengkakkan biaya embedding karena teks yang sama di-embed berkali-kali — 10–20% sudah cukup.</p>
+
+<div class="warn">
+	<span class="label">Batas pendekatan ini</span>
+	<p>Satu paragraf yang lebih panjang dari <code>size</code> akan lolos apa adanya. Itu bisa diterima untuk catatan pribadi; kalau korpusmu berisi tabel atau dokumen hukum, tambahkan pemotongan paksa per kalimat.</p>
+</div>
+
+<h2>4 · Identitas yang stabil</h2>
+
+<pre><code>async function sha256(text: string) {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(text),
+	);
+	return [...new Uint8Array(digest)]
+		.map((b) =&gt; b.toString(16).padStart(2, "0"))
+		.join("");
+}</code></pre>
+
+<p>ID vektor: <code>${source}#${i}</code>. Stabil antar-run, jadi <code>upsert</code> menggantikan vektor lama alih-alih menambah duplikat. Hash isi disimpan di D1 untuk melewati chunk yang tidak berubah:</p>
+
+<pre><code>const hash = await sha256(text);
+const existing = await env.DB
+	.prepare("SELECT hash FROM chunks WHERE id = ?")
+	.bind(id)
+	.first&lt;{ hash: string }&gt;();
+
+if (existing?.hash === hash) return null; // tidak perlu di-embed ulang</code></pre>
+
+<p>Ini yang membuat ingestion <em>idempotent</em>: menjalankan ulang proses yang sama tidak mengubah keadaan akhir. Tanpa ini, setiap kali kamu meng-upload dokumen yang sama, biaya embedding naik dan hasil pencarian mulai berisi duplikat.</p>
+
+<h2>5 · Skema D1 dan indeks vektor</h2>
+
+<pre><code>CREATE TABLE IF NOT EXISTS chunks (
+	id          TEXT PRIMARY KEY,
+	source      TEXT NOT NULL,
+	chunk_index INTEGER NOT NULL,
+	text        TEXT NOT NULL,
+	hash        TEXT NOT NULL,
+	created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
+
+<pre><code>npx wrangler d1 create rag
+npx wrangler r2 bucket create rag-docs
+npx wrangler vectorize create rag-index --dimensions=1024 --metric=cosine
+npx wrangler vectorize create-metadata-index rag-index \
+  --property-name=source --type=string</code></pre>
+
+<div class="warn">
+	<span class="label">Urutan yang tidak bisa dibalik</span>
+	<p>Metadata index harus dibuat <strong>sebelum</strong> vektor di-upsert. Vektor yang masuk sebelum metadata index ada tidak akan bisa difilter; satu-satunya perbaikan adalah meng-upsert ulang semuanya.</p>
+</div>
+
+<p>String yang bisa difilter hanya 64 byte pertama. Simpan <code>source</code> sebagai path pendek (<code>catatan/rag.md</code>), bukan URL panjang.</p>
+
+<h2>6 · Ingestion sebagai Workflow</h2>
+
+<p>Ingestion tidak boleh berjalan di dalam request handler. Workers Free hanya memberi 10 ms CPU per request, dan meng-embed ratusan chunk butuh waktu. Workflow memberi kamu langkah-langkah yang tahan gagal: kalau langkah ke-7 mati, langkah 1–6 tidak diulang.</p>
+
+<pre><code>import { WorkflowEntrypoint } from "cloudflare:workers";
+import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
+
+export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&gt; {
+	async run(event: WorkflowEvent&lt;{ key: string }&gt;, step: WorkflowStep) {
+		const { key } = event.payload;
+
+		const chunks = await step.do("extract + chunk", async () =&gt; {
+			const text = await extract(this.env, key);
+			return chunkText(text);
+		});
+
+		for (let i = 0; i &lt; chunks.length; i += 20) {
+			await step.do(`embed ${i}-${i + 20}`, async () =&gt; {
+				const batch = chunks.slice(i, i + 20);
+				const hashes = await Promise.all(batch.map(sha256));
+
+				const { data } = await this.env.AI.run("@cf/baai/bge-m3", {
+					text: batch,
+				});
+
+				await this.env.INDEX.upsert(
+					batch.map((_, j) =&gt; ({
+						id: `${key}#${i + j}`,
+						values: data[j],
+						metadata: { source: key, chunk: i + j },
+					})),
+				);
+
+				await this.env.DB.batch(
+					batch.map((text, j) =&gt;
+						this.env.DB.prepare(
+							`INSERT OR REPLACE INTO chunks
+							 (id, source, chunk_index, text, hash, created_at)
+							 VALUES (?, ?, ?, ?, ?, ?)`,
+						).bind(
+							`${key}#${i + j}`,
+							key,
+							i + j,
+							text,
+							hashes[j],
+							Date.now(),
+						),
+					),
+				);
+			});
+		}
+
+		return { chunks: chunks.length, key };
+	}
+}</code></pre>
+
+<p>Batch 20 chunk per langkah menjaga tiap langkah pendek dan bisa di-retry tanpa mengulang seluruh dokumen. Upsert maksimal 1.000 vektor per panggilan, jadi 20 jauh di bawah batas.</p>
+
+<p>Picu dari route kecil:</p>
+
+<pre><code>app.post("/ingest", async (c) =&gt; {
+	const { key } = await c.req.json&lt;{ key: string }&gt;();
+	if (!key) return c.text("key wajib", 400);
+
+	const instance = await c.env.INGEST.create({ params: { key } });
+	return c.json({ id: instance.id }, 202);
+});</code></pre>
+
+<h2>7 · Latihan</h2>
+
+<ol>
+	<li>Upload tiga dokumen ke R2: <code>npx wrangler r2 object put rag-docs/catatan/a.md --file a.md</code>.</li>
+	<li>Picu ingestion untuk ketiganya.</li>
+	<li>Catat jumlah baris: <code>npx wrangler d1 execute rag --remote --command "SELECT source, COUNT(*) FROM chunks GROUP BY source"</code>.</li>
+	<li>Jalankan ulang ingestion untuk dokumen yang sama.</li>
+	<li>Pastikan jumlah barisnya <strong>tidak berubah</strong>.</li>
+</ol>
+
+<div class="win">
+	<span class="label">Hasil sesi ini</span>
+	<p>Korpusmu ada di Vectorize dan D1, dengan ID yang stabil dan ingestion yang bisa diulang kapan saja tanpa menduplikasi data.</p>
+</div>
+
+<h2>8 · Cek pemahaman</h2>
+
+<details>
+	<summary>Dari memori: kenapa ID vektor harus deterministik?</summary>
+	<p>Karena <code>upsert</code> memutuskan "ganti atau tambah" berdasarkan ID. ID acak berarti setiap run menambah salinan baru; ID stabil berarti run berikutnya memperbarui yang sudah ada. Ini juga yang membuat retry pada Workflow aman.</p>
+</details>
+
+<div class="quiz">
+
+	<div class="quiz-q" data-answer="1" data-explain="Upsert memakai ID sebagai kunci. Dengan ID stabil, menjalankan ulang ingestion memperbarui baris yang sama alih-alih menambah duplikat.">
+		<p class="q-text">1. Apa yang membuat ingestion aman dijalankan berulang?</p>
+		<div class="opts">
+			<button class="opt" type="button">Ukuran chunk yang kecil dan seragam</button>
+			<button class="opt" type="button">ID vektor yang stabil dan deterministik</button>
+			<button class="opt" type="button">Overlap yang besar antar chunk</button>
+			<button class="opt" type="button">Batch embedding yang berukuran besar</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="3" data-explain="Request handler punya anggaran CPU sangat kecil (10 ms di Free). Ingestion butuh detik sampai menit, jadi harus async dan tahan gagal — itulah Workflow.">
+		<p class="q-text">2. Kenapa ingestion dijalankan sebagai Workflow, bukan di handler?</p>
+		<div class="opts">
+			<button class="opt" type="button">Karena Workflow lebih murah daripada Worker</button>
+			<button class="opt" type="button">Karena R2 hanya bisa diakses Workflow</button>
+			<button class="opt" type="button">Karena embedding butuh koneksi WebSocket</button>
+			<button class="opt" type="button">Karena CPU per request sangat terbatas</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="0" data-explain="Vektor yang masuk sebelum metadata index ada tidak terindeks untuk filter. Tidak ada cara memperbaikinya selain upsert ulang seluruh vektor.">
+		<p class="q-text">3. Kapan metadata index harus dibuat?</p>
+		<div class="opts">
+			<button class="opt" type="button">Sebelum vektor pertama di-upsert</button>
+			<button class="opt" type="button">Setelah semua vektor di-upsert</button>
+			<button class="opt" type="button">Saat query pertama dijalankan</button>
+			<button class="opt" type="button">Saat indeks mencapai batas ukuran</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="2" data-explain="Overlap menjaga kalimat atau definisi yang terpotong di batas chunk tetap utuh di salah satu sisi. Harganya: teks berulang dihitung ulang saat embedding.">
+		<p class="q-text">4. Apa fungsi overlap antar chunk?</p>
+		<div class="opts">
+			<button class="opt" type="button">Memperkecil jumlah vektor yang disimpan</button>
+			<button class="opt" type="button">Mempercepat proses embedding dokumen</button>
+			<button class="opt" type="button">Menjaga kalimat terpotong tetap utuh</button>
+			<button class="opt" type="button">Mengurangi biaya penyimpanan indeks</button>
+		</div>
+	</div>
+
+</div>
+
+<h2>9 · Sumber utama</h2>
+
+<p><a href="https://developers.cloudflare.com/workers-ai/guides/tutorials/build-a-retrieval-augmented-generation-ai/">Cloudflare — Build a RAG AI</a>, khususnya bagian workflow dan text splitting. Untuk konteks tambahan soal trade-off chunking: <a href="https://developers.cloudflare.com/ai-search/configuration/indexing/chunking/">AI Search — Chunking</a>.</p>
+
+<p class="small">Referensi API: <a href="https://developers.cloudflare.com/workers-ai/features/markdown-conversion/usage/binding/">toMarkdown (binding)</a> · <a href="https://developers.cloudflare.com/vectorize/reference/metadata-filtering/">metadata filtering</a> · <a href="https://developers.cloudflare.com/vectorize/platform/limits/">batas Vectorize</a>.</p>
+
+<div class="next">
+	<span class="label">Sesi berikutnya</span>
+	<p><strong>Sesi 4 — Retrieval:</strong> mengubah pertanyaan jadi vektor, mengambil top-K, menyaring dengan metadata, lalu memangkas 20 kandidat jadi 6 yang benar-benar layak masuk prompt.</p>
+</div>
+
+<div class="next">
+	<span class="label">Tanya gurunya</span>
+	<p>Korpusmu punya tabel, kode, atau PDF hasil scan? Tanya sebelum lanjut — tiap jenis isi butuh strategi chunking yang berbeda, dan lebih murah diperbaiki sekarang daripada setelah 2.000 vektor masuk.</p>
+</div>
+
+<div class="foot">
+	<span>RAG di Cloudflare · Sesi 3 dari 7</span>
+	<span><a href="0004-retrieval.html">Sesi 4 →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

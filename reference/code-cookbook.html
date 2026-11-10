@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cookbook — RAG di Cloudflare</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="page sheet">
+
+<nav class="crumbs">
+	<a href="../index.html">Daftar sesi</a> ·
+	<a href="rag-pipeline-map.html">Cheat sheet</a> ·
+	Cookbook
+</nav>
+
+<div class="kicker">Referensi kode · cetak &amp; tempel</div>
+<h1>Cookbook RAG di Cloudflare</h1>
+<p class="lede">Semua potongan kode yang dipakai sepanjang seri, dalam satu halaman. Disusun menurut urutan pipeline, bukan urutan sesi.</p>
+
+<h2>1 · Konfigurasi</h2>
+
+<pre><code>{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "rag-belajar",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+
+  "ai": { "binding": "AI", "remote": true },
+
+  "r2_buckets": [
+    { "binding": "DOCS", "bucket_name": "rag-docs" }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rag",
+      "database_id": "&lt;uuid-dari-wrangler&gt;"
+    }
+  ],
+
+  "vectorize": [
+    { "binding": "INDEX", "index_name": "rag-index" }
+  ],
+
+  "workflows": [
+    { "name": "ingest", "binding": "INGEST", "class_name": "IngestWorkflow" }
+  ]
+}</code></pre>
+
+<p><code>"remote": true</code> hanya untuk development agar <code>wrangler dev</code> memanggil model sungguhan. Setelah <code>wrangler types</code>, <code>env.AI</code> punya tipe.</p>
+
+<h2>2 · Perintah setup</h2>
+
+<pre><code>npx wrangler login
+npx wrangler d1 create rag
+npx wrangler r2 bucket create rag-docs
+npx wrangler vectorize create rag-index --dimensions=1024 --metric=cosine
+npx wrangler vectorize create-metadata-index rag-index \
+  --property-name=source --type=string
+npx wrangler vectorize create-metadata-index rag-index \
+  --property-name=created --type=number
+
+npx wrangler d1 execute rag --remote --file=schema.sql
+npx wrangler deploy</code></pre>
+
+<p class="small">Metadata index wajib dibuat sebelum vektor pertama di-upsert. Dimensi dan metrik terkunci setelah indeks dibuat.</p>
+
+<h2>3 · Skema D1</h2>
+
+<pre><code>CREATE TABLE IF NOT EXISTS chunks (
+  id          TEXT PRIMARY KEY,
+  source      TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  text        TEXT NOT NULL,
+  hash        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
+
+<h2>4 · Embedding</h2>
+
+<pre><code>const { data, shape } = await env.AI.run("@cf/baai/bge-m3", {
+  text: ["satu string", "atau array string"],
+});
+// shape: [jumlah input, 1024]
+// data: [[...1024 angka], ...]</code></pre>
+
+<h2>5 · Chunking</h2>
+
+<pre><code>function chunkText(text: string, size = 1200, overlap = 200): string[] {
+  const paragraphs = text.split(/\n{2,}/).map((p) =&gt; p.trim()).filter(Boolean);
+  const chunks: string[] = [];
+  let buf = "";
+
+  for (const p of paragraphs) {
+    if (buf.length &gt; 0 &amp;&amp; buf.length + p.length + 2 &gt; size) {
+      chunks.push(buf.trim());
+      buf = buf.slice(Math.max(0, buf.length - overlap)).trim() + "\n\n";
+    }
+    buf += p + "\n\n";
+  }
+  if (buf.trim()) chunks.push(buf.trim());
+  return chunks;
+}</code></pre>
+
+<h2>6 · Ekstraksi</h2>
+
+<pre><code>const obj = await env.DOCS.get(key);
+if (!obj) throw new Error(`Tidak ada objek: ${key}`);
+
+const [result] = await env.AI.toMarkdown({
+  name: key,
+  blob: new Blob([await obj.arrayBuffer()]),
+});
+
+if (result.format === "error") throw new Error(result.error);
+const text = result.data;</code></pre>
+
+<h2>7 · Ingestion (Workflow)</h2>
+
+<pre><code>import { WorkflowEntrypoint } from "cloudflare:workers";
+import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
+
+export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&gt; {
+  async run(event: WorkflowEvent&lt;{ key: string }&gt;, step: WorkflowStep) {
+    const { key } = event.payload;
+
+    const chunks = await step.do("extract + chunk", async () =&gt; {
+      const text = await extract(this.env, key);
+      return chunkText(text);
+    });
+
+    for (let i = 0; i &lt; chunks.length; i += 20) {
+      await step.do(`embed ${i}`, async () =&gt; {
+        const batch = chunks.slice(i, i + 20);
+        const { data } = await this.env.AI.run("@cf/baai/bge-m3", { text: batch });
+
+        await this.env.INDEX.upsert(
+          batch.map((_, j) =&gt; ({
+            id: `${key}#${i + j}`,
+            values: data[j],
+            metadata: { source: key, chunk: i + j },
+          })),
+        );
+
+        await this.env.DB.batch(
+          batch.map((text, j) =&gt;
+            this.env.DB.prepare(
+              `INSERT OR REPLACE INTO chunks
+               (id, source, chunk_index, text, hash, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+            ).bind(`${key}#${i + j}`, key, i + j, text, "", Date.now()),
+          ),
+        );
+      });
+    }
+  }
+}</code></pre>
+
+<p class="small">Tambahkan hash isi untuk melewati chunk yang tidak berubah. Batch 20 menjaga tiap langkah tetap pendek dan bisa di-retry.</p>
+
+<h2>8 · Query</h2>
+
+<pre><code>const { data } = await env.AI.run("@cf/baai/bge-m3", { text: [question] });
+
+const { matches } = await env.INDEX.query(data[0], {
+  topK: 20,
+  returnMetadata: "all",
+  filter: { source: { $in: ["catatan/rag.md"] } },
+});</code></pre>
+
+<p class="small">Filter diterapkan sebelum top-K. topK maksimum 50 bila metadata diminta, 100 bila tidak.</p>
+
+<h2>9 · Ambil teks, jaga urutan</h2>
+
+<pre><code>const ids = matches.map((m) =&gt; m.id);
+const placeholders = ids.map(() =&gt; "?").join(",");
+
+const { results } = await env.DB.prepare(
+  `SELECT id, source, chunk_index, text
+   FROM chunks WHERE id IN (${placeholders})`,
+).bind(...ids).all();
+
+const byId = new Map(results.map((r) =&gt; [r.id, r]));
+const candidates = matches
+  .map((m) =&gt; ({ ...byId.get(m.id), score: m.score }))
+  .filter((c) =&gt; c.text);</code></pre>
+
+<h2>10 · Rerank</h2>
+
+<pre><code>const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
+  query: question,
+  contexts: candidates.map((c) =&gt; ({ text: c.text })),
+  top_k: 6,
+});
+
+const top = response
+  .map((r) =&gt; ({ ...candidates[r.id], rerankScore: r.score }))
+  .sort((a, b) =&gt; b.rerankScore - a.rerankScore);</code></pre>
+
+<h2>11 · Fusion (hybrid)</h2>
+
+<pre><code>function rrf(lists: string[][], k = 60): [string, number][] {
+  const scores = new Map&lt;string, number&gt;();
+  for (const list of lists) {
+    list.forEach((id, i) =&gt; {
+      scores.set(id, (scores.get(id) ?? 0) + 1 / (k + i + 1));
+    });
+  }
+  return [...scores.entries()].sort((a, b) =&gt; b[1] - a[1]);
+}</code></pre>
+
+<h2>12 · Generation</h2>
+
+<pre><code>const context = top
+  .map((c, i) =&gt; `[${i + 1}] sumber: ${c.source}\n${c.text}`)
+  .join("\n\n");
+
+const messages = [
+  { role: "system", content: SYSTEM },
+  { role: "user", content: `KONTEKS:\n${context}\n\nPERTANYAAN: ${question}` },
+];
+
+const stream = await env.AI.run("@cf/qwen/qwen3-30b-a3b-fp8", {
+  messages,
+  stream: true,
+  max_tokens: 512,
+  temperature: 0.2,
+});
+
+return new Response(stream, {
+  headers: {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+  },
+});</code></pre>
+
+<h2>13 · Verifikasi sitasi</h2>
+
+<pre><code>const allowed = new Set(top.map((c) =&gt; c.source));
+const cited = [...answer.matchAll(/\[([^\]]+)\]/g)].map((m) =&gt; m[1]);
+const invalid = [...new Set(cited)].filter((s) =&gt; !allowed.has(s));</code></pre>
+
+<h2>14 · Gateway</h2>
+
+<pre><code>const res = await env.AI.run(model, input, {
+  gateway: {
+    id: "rag",
+    metadata: { experiment: "rerank-on", question_id: id },
+  },
+});
+
+const logId = env.AI.aiGatewayLogId;</code></pre>
+
+<p class="small">Nilai metadata harus string. <code>cacheTtl</code>, <code>cacheKey</code>, dan <code>skipCache</code> tersedia di objek yang sama.</p>
+
+<h2>15 · Hapus satu sumber</h2>
+
+<pre><code>const { results } = await env.DB
+  .prepare("SELECT id FROM chunks WHERE source = ?")
+  .bind(source)
+  .all();
+
+const ids = results.map((r) =&gt; r.id);
+
+await env.DB.prepare("DELETE FROM chunks WHERE source = ?").bind(source).run();
+if (ids.length) await env.INDEX.deleteByIds(ids);
+await env.DOCS.delete(source);</code></pre>
+
+<p class="small">Delete Vectorize asinkron: butuh beberapa detik sampai hilang dari hasil query.</p>
+
+<h2>16 · Angka batas</h2>
+
+<table>
+<thead><tr><th>Batas</th><th>Nilai</th></tr></thead>
+<tbody>
+<tr><td>Dimensi vektor</td><td>1024 untuk <code>bge-m3</code>; maksimum 1536</td></tr>
+<tr><td>topK</td><td>50 dengan metadata/values, 100 tanpa</td></tr>
+<tr><td>Metadata per vektor</td><td>10 KiB; 64 byte pertama per string yang difilter</td></tr>
+<tr><td>Metadata index</td><td>10 per indeks</td></tr>
+<tr><td>Upsert per batch</td><td>1.000 lewat binding</td></tr>
+<tr><td>Vektor per indeks</td><td>20.000.000</td></tr>
+<tr><td>CPU per request</td><td>10 ms (Free), 30 s default (Paid)</td></tr>
+<tr><td>Neuron gratis</td><td>10.000 per hari</td></tr>
+</tbody>
+</table>
+
+<h2>17 · Sumber</h2>
+<ul>
+	<li><a href="https://developers.cloudflare.com/vectorize/reference/client-api/">Vectorize API</a> · <a href="https://developers.cloudflare.com/vectorize/platform/limits/">Limits</a></li>
+	<li><a href="https://developers.cloudflare.com/workers-ai/models/">Workers AI models</a> · <a href="https://developers.cloudflare.com/workers-ai/platform/pricing/">Pricing</a></li>
+	<li><a href="https://developers.cloudflare.com/workers-ai/features/markdown-conversion/usage/binding/">toMarkdown</a> · <a href="https://developers.cloudflare.com/workers/platform/limits/">Workers limits</a></li>
+	<li><a href="https://developers.cloudflare.com/ai-gateway/usage/worker-binding-methods/">AI Gateway binding</a></li>
+</ul>
+
+<div class="foot">
+	<span>RAG di Cloudflare · cookbook</span>
+	<span><a href="rag-pipeline-map.html">Cheat sheet →</a></span>
+</div>
+
+</main>
+</body>
+</html>

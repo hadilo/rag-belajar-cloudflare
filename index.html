@@ -9,14 +9,14 @@
 <body>
 <main class="page">
 
-<div class="kicker">Workspace belajar</div>
+<div class="kicker">Workspace belajar · 7 sesi</div>
 <h1>RAG chat di Cloudflare, dari nol</h1>
 <p class="lede">Membangun chatbot yang menjawab dari dokumen sendiri — manual, dengan Workers, Vectorize, dan Workers AI. Tiap sesi satu konsep, satu latihan, satu sumber utama.</p>
 
 <p class="meta">
-	<span>7 sesi</span>
 	<span>Bahasa Indonesia</span>
 	<span>TypeScript</span>
+	<span>Bangun manual</span>
 </p>
 
 <h2>Sesi</h2>
@@ -24,35 +24,46 @@
 <div class="cards">
 	<div class="card">
 		<h4><a href="lessons/0001-mental-model-rag.html">1 · Dua loop yang menentukan segalanya</a></h4>
-		<p>Peta pipeline RAG, enam komponen Cloudflare, tiga mode kegagalan. Plus latihan menyusun set pertanyaan uji.</p>
+		<p>Peta pipeline RAG, enam komponen Cloudflare, tiga mode kegagalan. Latihan: menyusun set pertanyaan uji.</p>
 	</div>
 	<div class="card">
-		<h4>2 · Panggilan pertama</h4>
-		<p>Scaffold Worker, binding <code>AI</code>, embedding <code>bge-m3</code>, deploy. Belum ditulis.</p>
+		<h4><a href="lessons/0002-first-embedding.html">2 · Panggilan pertama</a></h4>
+		<p>Scaffold Worker, binding <code>AI</code>, embedding <code>bge-m3</code>, deploy. Latihan: membuktikan jarak vektor menangkap makna.</p>
 	</div>
 	<div class="card">
-		<h4>3 · Chunking &amp; ingestion</h4>
-		<p>Ekstraksi, recursive split, metadata, ID deterministik, Workflow. Belum ditulis.</p>
+		<h4><a href="lessons/0003-ingestion.html">3 · Memasukkan korpus</a></h4>
+		<p><code>toMarkdown</code>, chunking dengan overlap, ID deterministik, Workflow. Latihan: ingestion yang bisa diulang.</p>
 	</div>
 	<div class="card">
-		<h4>4 · Retrieval</h4>
-		<p>topK, filter metadata, hybrid search, reranker. Belum ditulis.</p>
+		<h4><a href="lessons/0004-retrieval.html">4 · Retrieval</a></h4>
+		<p>topK, filter metadata, reranker, hybrid dengan RRF. Latihan: mengukur hit@20 dan hit@6.</p>
 	</div>
 	<div class="card">
-		<h4>5 · Generation &amp; sitasi</h4>
-		<p>Prompt yang bersandar pada konteks, streaming, anggaran token. Belum ditulis.</p>
+		<h4><a href="lessons/0005-generation.html">5 · Generation &amp; sitasi</a></h4>
+		<p>Prompt sebagai kontrak, penolakan, verifikasi sitasi di kode, streaming. Latihan: chat yang menolak saat tidak tahu.</p>
 	</div>
 	<div class="card">
-		<h4>6–7 · Evaluasi, biaya, produksi</h4>
-		<p>Mengukur recall, menekan biaya, cache, rate limit, keamanan. Belum ditulis.</p>
+		<h4><a href="lessons/0006-evaluation-cost.html">6 · Angka sebelum opini</a></h4>
+		<p>hit@k, MRR, validitas sitasi, biaya per pertanyaan, AI Gateway. Latihan: baseline + satu eksperimen.</p>
+	</div>
+	<div class="card">
+		<h4><a href="lessons/0007-production.html">7 · Yang tidak terlihat di demo</a></h4>
+		<p>Akses, prompt injection, sinkronisasi dan penghapusan, migrasi embedding, kapan pindah ke AI Search.</p>
 	</div>
 </div>
 
 <h2>Referensi</h2>
 
-<ul>
-	<li><a href="reference/rag-pipeline-map.html">Cheat sheet — peta RAG di Cloudflare</a> · dua loop, angka batas, parameter awal, hitungan biaya. Dirancang untuk dicetak.</li>
-</ul>
+<div class="cards">
+	<div class="card">
+		<h4><a href="reference/rag-pipeline-map.html">Peta RAG di Cloudflare</a></h4>
+		<p>Satu halaman: dua loop, komponen, angka batas, parameter awal, hitungan biaya. Dirancang untuk dicetak.</p>
+	</div>
+	<div class="card">
+		<h4><a href="reference/code-cookbook.html">Cookbook kode</a></h4>
+		<p>Semua potongan kode sepanjang seri: config, skema, embedding, query, rerank, stream, hapus.</p>
+	</div>
+</div>
 
 <h2>Tentang</h2>
 

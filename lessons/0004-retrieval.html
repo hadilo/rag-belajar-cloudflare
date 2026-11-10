@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sesi 4 — Retrieval: memilih delapan chunk yang tepat</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="page">
+
+<nav class="crumbs">
+	<a href="../index.html">Daftar sesi</a> · Sesi 4 ·
+	<a href="../reference/rag-pipeline-map.html">Cheat sheet</a>
+</nav>
+
+<div class="kicker">Sesi 4 · retrieval</div>
+<h1>Retrieval: memilih delapan chunk yang tepat</h1>
+<p class="lede">Inilah 80% pekerjaan RAG. Kalau chunk yang benar tidak masuk daftar, model terbaik pun hanya bisa mengarang dengan lancar. Sesi ini membuat retrievalmu bisa diperiksa, bukan dipercaya.</p>
+
+<p class="meta">
+	<span>±15 menit</span>
+	<span>Prasyarat: Sesi 3</span>
+	<span>Hasil: endpoint <code>/search</code> yang bisa diaudit</span>
+</p>
+
+<h2>1 · Satu embedding, satu query</h2>
+
+<pre><code>const { data } = await env.AI.run("@cf/baai/bge-m3", {
+	text: [question],
+});
+
+const { matches } = await env.INDEX.query(data[0], {
+	topK: 20,
+	returnMetadata: "all",
+});</code></pre>
+
+<p>Ambil 20, bukan 5. Alasannya: peringkat pertama sering benar, tapi chunk yang <em>menyelamatkan</em> jawaban sering ada di posisi 8–15. Reranker di langkah 4 akan memangkasnya kembali.</p>
+
+<p><code>returnMetadata: "all"</code> memberi metadata lengkap, dengan konsekuensi topK dibatasi 50. Kalau kamu hanya butuh field yang terindeks, <code>"indexed"</code> lebih murah dan tidak menambah latency.</p>
+
+<h2>2 · Mengambil teks, menjaga urutan</h2>
+
+<p>Vectorize mengembalikan ID dan skor, bukan teks. Teksnya ada di D1. Jebakan kecil: <code>WHERE id IN (...)</code> tidak menjamin urutan hasil, jadi urutkan ulang berdasarkan skor dari Vectorize.</p>
+
+<pre><code>const ids = matches.map((m) =&gt; m.id);
+const placeholders = ids.map(() =&gt; "?").join(",");
+
+const { results } = await env.DB.prepare(
+	`SELECT id, source, chunk_index, text
+	 FROM chunks WHERE id IN (${placeholders})`,
+)
+	.bind(...ids)
+	.all&lt;{ id: string; source: string; chunk_index: number; text: string }&gt;();
+
+const byId = new Map(results.map((r) =&gt; [r.id, r]));
+
+const candidates = matches
+	.map((m) =&gt; ({ ...byId.get(m.id), score: m.score }))
+	.filter((c) =&gt; c.text);</code></pre>
+
+<h2>3 · Filter metadata</h2>
+
+<p>Filter menyempitkan kandidat <strong>sebelum</strong> top-K dihitung. Artinya filter bukan sekadar kosmetik: ia mengubah chunk mana yang bisa menang.</p>
+
+<pre><code>const { matches } = await env.INDEX.query(data[0], {
+	topK: 20,
+	returnMetadata: "all",
+	filter: { source: { $in: ["catatan/rag.md", "catatan/cloudflare.md"] } },
+});</code></pre>
+
+<table>
+<thead><tr><th>Operator</th><th>Arti</th><th>Contoh</th></tr></thead>
+<tbody>
+<tr><td><code>$eq</code></td><td>Sama dengan</td><td><code>{ source: "a.md" }</code></td></tr>
+<tr><td><code>$ne</code></td><td>Tidak sama</td><td><code>{ tag: { $ne: "draft" } }</code></td></tr>
+<tr><td><code>$in</code></td><td>Termasuk salah satu</td><td><code>{ source: { $in: ["a.md","b.md"] } }</code></td></tr>
+<tr><td><code>$gte</code> / <code>$lt</code></td><td>Rentang angka atau prefix string</td><td><code>{ tahun: { $gte: 2024 } }</code></td></tr>
+</tbody>
+</table>
+
+<p>Dua batasan yang sering menggigit: hanya 10 properti yang bisa diindeks per indeks, dan hanya 64 byte pertama tiap string yang bisa difilter. Simpan path pendek.</p>
+
+<p>Untuk isolasi per pengguna, <strong>namespace</strong> lebih tepat daripada metadata: filter namespace diterapkan lebih dulu, dan satu indeks bisa punya puluhan ribu namespace. Metadata tetap dipakai untuk penyaringan yang lebih kaya di dalam satu namespace.</p>
+
+<h2>4 · Reranking: dari 20 jadi 6</h2>
+
+<p>Embedding adalah <em>bi-encoder</em>: dokumen dan pertanyaan di-embed terpisah, lalu dibandingkan. Cepat, tapi kehilangan interaksi halus antar kata. Reranker adalah <em>cross-encoder</em>: ia membaca pertanyaan dan chunk <em>bersamaan</em>, jadi jauh lebih akurat — dan jauh lebih lambat per pasangan.</p>
+
+<p>Karena itu polanya selalu dua tahap: ambil banyak dengan cara murah, saring dengan cara mahal.</p>
+
+<pre><code>const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
+	query: question,
+	contexts: candidates.map((c) =&gt; ({ text: c.text })),
+	top_k: 6,
+});
+
+// Item respons merujuk ke indeks pada array contexts.
+const top = response
+	.map((r) =&gt; ({ ...candidates[r.id], rerankScore: r.score }))
+	.sort((a, b) =&gt; b.rerankScore - a.rerankScore);</code></pre>
+
+<p>Biayanya $0,003 per juta token — untuk 20 chunk pendek, praktis nol. Waktu tambahannya ratusan milidetik. Itu trade-off yang hampir selalu layak.</p>
+
+<div class="note">
+	<span class="label">Periksa sekali</span>
+	<p>Bentuk item respons bisa berbeda antar model. Jalankan sekali dengan <code>console.log(response)</code> dan pastikan field-nya sebelum mengandalkan pemetaan di atas.</p>
+</div>
+
+<h2>5 · Hybrid search: saat kemiripan makna tidak cukup</h2>
+
+<p>Vectorize hanya melakukan pencarian vektor. Ia tidak punya BM25. Akibatnya, query seperti <code>"error 1102"</code>, <code>"SK-2024-117"</code>, atau <code>"fungsi toMarkdown"</code> bisa meleset: token yang sangat spesifik tidak punya "makna" yang kuat untuk di-embed, justru butuh kecocokan literal.</p>
+
+<p>Solusinya menggabungkan dua daftar peringkat. Cara paling sederhana dan tahan banting: <em>reciprocal rank fusion</em>.</p>
+
+<pre><code>function rrf(lists: string[][], k = 60) {
+	const scores = new Map&lt;string, number&gt;();
+	for (const list of lists) {
+		list.forEach((id, i) =&gt; {
+			scores.set(id, (scores.get(id) ?? 0) + 1 / (k + i + 1));
+		});
+	}
+	return [...scores.entries()].sort((a, b) =&gt; b[1] - a[1]);
+}</code></pre>
+
+<p>RRF hanya butuh urutan, bukan skor — jadi kamu tidak perlu menormalkan skor cosine (0–1) dengan skor BM25 (tak terbatas). Itu sebabnya ia jadi default di banyak sistem.</p>
+
+<p>Untuk daftar kedua, ada dua pilihan:</p>
+
+<table>
+<thead><tr><th>Pilihan</th><th>Kelebihan</th><th>Konsekuensi</th></tr></thead>
+<tbody>
+<tr><td>D1 FTS5 (SQLite full-text)</td><td>BM25 asli, satu database</td><td>Dukungan virtual table di D1 perlu diuji di akunmu — coba <code>CREATE VIRTUAL TABLE ... USING fts5</code> di database percobaan dulu</td></tr>
+<tr><td>Skor kata kunci sederhana</td><td>Pasti jalan: hitung irisan token di kandidat teratas</td><td>Hanya menyaring kandidat yang sudah lolos vektor, bukan mencari di seluruh korpus</td></tr>
+<tr><td>AI Search (managed)</td><td>Hybrid sudah default</td><td>Keluar dari jalur "bangun sendiri" — bahas di sesi 7</td></tr>
+</tbody>
+</table>
+
+<div class="warn">
+	<span class="label">Jangan mengarang dukungan</span>
+	<p>Sebelum memakai FTS5, buktikan dulu di database percobaan. Kalau perintah <code>CREATE VIRTUAL TABLE</code> ditolak, jangan paksakan — pakai skor kata kunci sederhana dan lanjut. Yang penting: hybrid bukan syarat, ia perbaikan opsional setelah kamu punya data evaluasi.</p>
+</div>
+
+<h2>6 · Ambang skor: jangan menebak</h2>
+
+<p>Pertanyaan pertamamu mungkin: "skor berapa yang dianggap relevan?" Jawaban jujurnya: tidak ada angka universal. Distribusi skor bergantung pada model embedding, panjang chunk, dan korpusmu.</p>
+
+<p>Cara yang benar: jalankan 20 pertanyaan dari golden set-mu, catat skor chunk yang benar dan chunk yang salah, lalu lihat apakah ada celah. Kalau skor benar semua di atas 0,62 dan yang salah di bawah 0,55, ambang 0,58 masuk akal. Kalau tumpang tindih, ambang tidak akan menolong — perbaiki retrieval-nya.</p>
+
+<h2>7 · Latihan</h2>
+
+<ol>
+	<li>Buat endpoint <code>GET /search?q=...</code> yang mengembalikan 6 chunk teratas: <code>id</code>, <code>source</code>, <code>chunk_index</code>, <code>score</code>, <code>rerankScore</code>, dan 120 karakter pertama teks.</li>
+	<li>Untuk 10 pertanyaan dari <code>eval/questions.md</code>, catat: apakah file sumber yang benar muncul di top-20? Apakah masih muncul setelah rerank jadi 6?</li>
+	<li>Tulis dua angka: <strong>hit@20</strong> dan <strong>hit@6</strong>. Itu baseline retrieval-mu.</li>
+</ol>
+
+<div class="win">
+	<span class="label">Hasil sesi ini</span>
+	<p>Kamu bisa melihat persis chunk apa yang terambil untuk sebuah pertanyaan, dan punya dua angka baseline yang akan dibandingkan setiap kali kamu mengubah chunking atau reranker.</p>
+</div>
+
+<h2>8 · Cek pemahaman</h2>
+
+<details>
+	<summary>Dari memori: kenapa filter metadata mengubah hasil lebih dari sekadar "menyembunyikan" hasil yang tidak relevan?</summary>
+	<p>Karena filter diterapkan sebelum top-K dihitung. Chunk yang tersembunyi tidak lagi mengambil slot di 20 besar, sehingga chunk relevan dari sumber lain bisa naik. Kalau filter diterapkan setelah top-K, kamu bisa mendapat 20 hasil yang semuanya tersaring habis.</p>
+</details>
+
+<div class="quiz">
+
+	<div class="quiz-q" data-answer="2" data-explain="Filter membatasi ruang kandidat lebih dulu, baru top-K diambil dari kandidat itu. Urutan ini yang membuat filter berguna untuk isolasi data.">
+		<p class="q-text">1. Kapan filter metadata diterapkan pada query?</p>
+		<div class="opts">
+			<button class="opt" type="button">Setelah top-K dipilih dan diurutkan</button>
+			<button class="opt" type="button">Setelah reranker selesai memberi skor</button>
+			<button class="opt" type="button">Sebelum top-K dihitung dari kandidat</button>
+			<button class="opt" type="button">Saat vektor pertama kali di-upsert</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="0" data-explain="Ambil banyak untuk menjaga recall, lalu saring untuk menjaga presisi. Reranker mahal per pasangan, jadi tidak mungkin menjalankannya pada seluruh korpus.">
+		<p class="q-text">2. Kenapa mengambil 20 chunk lalu menyaringnya jadi 6?</p>
+		<div class="opts">
+			<button class="opt" type="button">Recall dijaga di tahap murah, presisi di tahap mahal</button>
+			<button class="opt" type="button">Karena Vectorize membatasi hasil maksimal enam</button>
+			<button class="opt" type="button">Karena model generasi hanya menerima enam chunk</button>
+			<button class="opt" type="button">Karena metadata hanya tersedia untuk enam hasil</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="3" data-explain="Token spesifik seperti kode error, nomor dokumen, atau nama fungsi sering tidak tertangkap embedding. Pencocokan literal menambalnya, lalu hasilnya digabung dengan RRF.">
+		<p class="q-text">3. Query jenis apa yang paling butuh hybrid search?</p>
+		<div class="opts">
+			<button class="opt" type="button">Pertanyaan konseptual yang panjang</button>
+			<button class="opt" type="button">Parafrase dari dokumen yang sama</button>
+			<button class="opt" type="button">Ringkasan dari beberapa dokumen</button>
+			<button class="opt" type="button">Kode error dan nomor dokumen</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="1" data-explain="Skor bergantung pada model, panjang chunk, dan korpus. Ambang yang benar berasal dari distribusi skor pada golden set, bukan dari angka yang dilihat di tutorial.">
+		<p class="q-text">4. Dari mana angka ambang skor yang layak berasal?</p>
+		<div class="opts">
+			<button class="opt" type="button">Nilai default dari dokumentasi model</button>
+			<button class="opt" type="button">Distribusi skor pada golden set sendiri</button>
+			<button class="opt" type="button">Rata-rata skor seluruh korpus</button>
+			<button class="opt" type="button">Angka yang dipakai tutorial populer</button>
+		</div>
+	</div>
+
+</div>
+
+<h2>9 · Sumber utama</h2>
+
+<p><a href="https://www.anthropic.com/research/contextual-retrieval">Anthropic — Contextual Retrieval</a>. Bukan tentang Cloudflare, tapi ini rujukan paling jujur soal angka: contextual embeddings + BM25 memotong kegagalan retrieval sekitar 49%, dan sekitar 67% bila ditambah reranking. Baca untuk memahami <em>kenapa</em> hybrid dan rerank layak dikerjakan.</p>
+
+<p class="small">Referensi API: <a href="https://developers.cloudflare.com/vectorize/reference/client-api/">Vectorize API</a> · <a href="https://developers.cloudflare.com/vectorize/reference/metadata-filtering/">metadata filtering</a> · <a href="https://developers.cloudflare.com/workers-ai/models/bge-reranker-base/">bge-reranker-base</a>.</p>
+
+<div class="next">
+	<span class="label">Sesi berikutnya</span>
+	<p><strong>Sesi 5 — Generation:</strong> menyusun prompt yang memaksa model bersandar pada konteks, sitasi yang bisa diverifikasi, penolakan yang sopan, dan streaming yang terasa cepat.</p>
+</div>
+
+<div class="next">
+	<span class="label">Tanya gurunya</span>
+	<p>Mau tahu cara mengukur apakah reranker benar-benar membantu di korpusmu, atau bagaimana mengisolasi dokumen per pengguna dengan namespace? Tanya — keduanya keputusan arsitektur, bukan detail kode.</p>
+</div>
+
+<div class="foot">
+	<span>RAG di Cloudflare · Sesi 4 dari 7</span>
+	<span><a href="0005-generation.html">Sesi 5 →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

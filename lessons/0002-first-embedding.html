@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sesi 2 — Panggilan pertama: dari nol ke vektor</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="page">
+
+<nav class="crumbs">
+	<a href="../index.html">Daftar sesi</a> · Sesi 2 ·
+	<a href="../reference/rag-pipeline-map.html">Cheat sheet</a>
+</nav>
+
+<div class="kicker">Sesi 2 · setup</div>
+<h1>Panggilan pertama: dari nol ke vektor</h1>
+<p class="lede">Sepuluh menit lagi kamu punya Worker ter-deploy yang mengubah teks menjadi 1.024 angka. Ini satu-satunya bagian RAG yang benar-benar "AI" di sisi ingestion — sisanya rekayasa data.</p>
+
+<p class="meta">
+	<span>±10 menit</span>
+	<span>Prasyarat: Sesi 1, akun Cloudflare, Node.js</span>
+	<span>Hasil: URL yang mengembalikan vektor</span>
+</p>
+
+<h2>1 · Scaffold</h2>
+
+<p>Buat project TypeScript kosong. Pilih <em>Hello World</em> → <em>Worker only</em> → TypeScript, git ya, deploy tidak.</p>
+
+<pre><code>npm create cloudflare@latest -- rag-belajar
+cd rag-belajar</code></pre>
+
+<p>Yang penting cuma dua file: <code>wrangler.jsonc</code> (konfigurasi + binding) dan <code>src/index.ts</code> (kode). Tidak ada server, tidak ada Docker, tidak ada region.</p>
+
+<h2>2 · Binding, bukan API key</h2>
+
+<p>Di Cloudflare, akses ke layanan lain diberikan lewat <strong>binding</strong>: deklarasi di konfigurasi yang muncul sebagai objek di <code>env</code>. Tidak ada kredensial yang bisa bocor di kode atau di <code>.env</code>.</p>
+
+<pre><code>{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "rag-belajar",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  }
+}</code></pre>
+
+<p><code>"remote": true</code> membuat <code>wrangler dev</code> memanggil model sungguhan saat development, bukan meniru hasilnya. Inferensi tetap berjalan di jaringan Cloudflare, jadi model yang kamu uji sama dengan yang nanti dipakai di produksi.</p>
+
+<p>Setelah mengubah konfigurasi, jalankan ini sekali:</p>
+
+<pre><code>npx wrangler types</code></pre>
+
+<p>Perintah itu menghasilkan tipe untuk <code>env</code> dari binding yang kamu deklarasikan. Kalau nanti <code>env.AI</code> dianggap tidak ada oleh TypeScript, hampir selalu jawabannya: <code>wrangler types</code> belum dijalankan.</p>
+
+<h2>3 · Panggilan pertama</h2>
+
+<p>Ganti isi <code>src/index.ts</code>:</p>
+
+<pre><code>export default {
+	async fetch(request, env): Promise&lt;Response&gt; {
+		const { data, shape } = await env.AI.run("@cf/baai/bge-m3", {
+			text: ["Halo, ini uji coba embedding."],
+		});
+
+		return Response.json({
+			shape,
+			dimensions: data[0].length,
+			firstFive: data[0].slice(0, 5),
+		});
+	},
+} satisfies ExportedHandler&lt;Env&gt;;</code></pre>
+
+<p>Jalankan <code>npx wrangler dev</code>, buka <code>http://localhost:8787</code>. Yang keluar kira-kira:</p>
+
+<pre><code>{
+  "shape": [1, 1024],
+  "dimensions": 1024,
+  "firstFive": [-0.0123, 0.0441, -0.0087, 0.0204, 0.0311]
+}</code></pre>
+
+<p><strong>Itu dia inti RAG.</strong> Satu kalimat menjadi satu titik di ruang 1.024 dimensi. Tidak ada yang bisa dibaca manusia di angka-angka itu — maknanya hanya ada dalam jarak antar vektor.</p>
+
+<div class="note">
+	<span class="label">Bentuk respons</span>
+	<p><code>shape</code> adalah <code>[jumlah input, dimensi]</code>. <code>data</code> adalah array vektor, satu per input, dalam urutan yang sama. Model ini menerima satu string atau array string.</p>
+</div>
+
+<h2>4 · Kenapa <code>bge-m3</code></h2>
+
+<p>Tutorial resmi Cloudflare memakai <code>bge-base-en-v1.5</code>. Kita tidak, karena dokumenmu berbahasa Indonesia.</p>
+
+<table>
+<thead><tr><th>Model</th><th>Dimensi</th><th>Bahasa</th><th>Harga input</th></tr></thead>
+<tbody>
+<tr><td><code>@cf/baai/bge-small-en-v1.5</code></td><td>384</td><td>Inggris</td><td>$0,020 / juta token</td></tr>
+<tr><td><code>@cf/baai/bge-base-en-v1.5</code></td><td>768</td><td>Inggris</td><td>$0,067 / juta token</td></tr>
+<tr><td><code>@cf/baai/bge-m3</code></td><td>1024</td><td>Multibahasa</td><td>$0,012 / juta token</td></tr>
+<tr><td><code>@cf/qwen/qwen3-embedding-0.6b</code></td><td>1024</td><td>Multibahasa</td><td>$0,012 / juta token</td></tr>
+</tbody>
+</table>
+
+<p>Perhatikan dua hal. Pertama, model multibahasa justru <em>lebih murah</em> daripada model Inggris kecil sekalipun. Kedua, dimensi berbeda-beda — dan ini keputusan yang tidak bisa diubah setelah indeks dibuat.</p>
+
+<div class="warn">
+	<span class="label">Keputusan yang mengikat</span>
+	<p>Indeks Vectorize dikunci pada satu dimensi. Kalau nanti kamu pindah model, kamu membuat indeks baru dan mengisi ulang seluruh vektor. Pilih sekarang dengan sadar; ganti model = migrasi, bukan setting.</p>
+</div>
+
+<h2>5 · Deploy</h2>
+
+<pre><code>npx wrangler login
+npx wrangler deploy</code></pre>
+
+<p>Kamu akan mendapat URL <code>https://rag-belajar.&lt;subdomain&gt;.workers.dev</code>. Uji dari terminal:</p>
+
+<pre><code>curl https://rag-belajar.&lt;subdomain&gt;.workers.dev | head -c 200</code></pre>
+
+<p>Kalau muncul 523 tepat setelah deploy pertama, itu DNS yang belum merambat — tunggu sebentar, bukan bug kode.</p>
+
+<h2>6 · Biaya dan batas</h2>
+
+<p>Workers AI memberi 10.000 neuron gratis per hari. Embedding <code>bge-m3</code> memakan sekitar 1.075 neuron per juta token — artinya 10.000 neuron cukup untuk sekitar 9 juta token, atau kira-kira 20.000 halaman teks, <em>per hari</em>, gratis. Embedding bukan bagian yang mahal dalam RAG.</p>
+
+<p>Yang mahal nanti adalah token output model generasi. Ingat angka itu untuk sesi 6.</p>
+
+<h2>7 · Latihan: buktikan embedding menangkap makna</h2>
+
+<p>Ganti handler dengan yang membandingkan tiga kalimat. Ini latihan 30 detik yang membuat konsep "jarak" jadi konkret.</p>
+
+<pre><code>function cosine(a: number[], b: number[]) {
+	let dot = 0, na = 0, nb = 0;
+	for (let i = 0; i &lt; a.length; i++) {
+		dot += a[i] * b[i];
+		na += a[i] * a[i];
+		nb += b[i] * b[i];
+	}
+	return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+export default {
+	async fetch(request, env): Promise&lt;Response&gt; {
+		const { data } = await env.AI.run("@cf/baai/bge-m3", {
+			text: [
+				"cara menyeduh kopi",
+				"resep espresso di rumah",
+				"pajak kendaraan bermotor",
+			],
+		});
+
+		return Response.json({
+			kopi_vs_espresso: cosine(data[0], data[1]),
+			kopi_vs_pajak: cosine(data[0], data[2]),
+		});
+	},
+} satisfies ExportedHandler&lt;Env&gt;;</code></pre>
+
+<p>Kalimat pertama dan kedua tidak berbagi satu kata pun, tapi skornya akan jauh lebih tinggi daripada ke kalimat pajak. Itulah yang dimaksud "mirip secara makna" — dan itu sebabnya pencarian vektor bisa menemukan dokumen yang tidak memakai kata yang sama dengan pertanyaanmu.</p>
+
+<div class="win">
+	<span class="label">Hasil sesi ini</span>
+	<p>Worker ter-deploy, binding <code>AI</code> bekerja, dan kamu sudah melihat sendiri bahwa embedding mengukur kemiripan makna, bukan kemiripan kata.</p>
+</div>
+
+<h2>8 · Cek pemahaman</h2>
+
+<details>
+	<summary>Dari memori: apa yang terjadi kalau dokumen di-embed dengan <code>bge-m3</code> tapi pertanyaan di-embed dengan <code>bge-base-en-v1.5</code>?</summary>
+	<p>Vektornya berada di ruang yang berbeda dan dimensinya pun berbeda (1024 vs 768). Query akan gagal karena dimensi tidak cocok, atau — kalau kebetulan dimensinya sama — skornya tidak bermakna. Aturannya mutlak: model yang sama untuk indexing dan query.</p>
+</details>
+
+<div class="quiz">
+
+	<div class="quiz-q" data-answer="2" data-explain="Kemiripan hanya bermakna di dalam satu ruang vektor. Model berbeda menghasilkan ruang berbeda, jadi skornya tidak bisa dibandingkan.">
+		<p class="q-text">1. Kenapa query harus di-embed dengan model yang sama?</p>
+		<div class="opts">
+			<button class="opt" type="button">Supaya biaya embedding lebih murah</button>
+			<button class="opt" type="button">Supaya latency query lebih rendah</button>
+			<button class="opt" type="button">Supaya vektornya berada di ruang sama</button>
+			<button class="opt" type="button">Supaya ukuran indeks tetap kecil</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="0" data-explain="Dimensi terkunci saat indeks dibuat. Vektor 1024 dimensi tidak bisa masuk ke indeks 768 dimensi; kamu perlu indeks baru dan re-index.">
+		<p class="q-text">2. Indeks dibuat 768 dimensi, lalu kamu pindah ke model 1024 dimensi. Apa yang terjadi?</p>
+		<div class="opts">
+			<button class="opt" type="button">Upsert ditolak karena dimensi tidak cocok</button>
+			<button class="opt" type="button">Vectorize memotong vektor secara otomatis</button>
+			<button class="opt" type="button">Indeks mengubah dimensinya sendiri</button>
+			<button class="opt" type="button">Query tetap jalan tapi skornya acak</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="1" data-explain="Binding adalah deklarasi resource di wrangler.jsonc; env.AI tersedia tanpa API key. wrangler types hanya menurunkan tipe TypeScript dari binding itu.">
+		<p class="q-text">3. Apa fungsi <code>ai.binding</code> di <code>wrangler.jsonc</code>?</p>
+		<div class="opts">
+			<button class="opt" type="button">Menyimpan API key Cloudflare secara lokal</button>
+			<button class="opt" type="button">Mendeklarasikan akses model lewat env.AI</button>
+			<button class="opt" type="button">Menentukan model default untuk semua request</button>
+			<button class="opt" type="button">Mengaktifkan billing Workers AI di akun</button>
+		</div>
+	</div>
+
+</div>
+
+<h2>9 · Sumber utama</h2>
+
+<p><a href="https://developers.cloudflare.com/vectorize/get-started/embeddings/">Vectorize dan Workers AI — dokumentasi Cloudflare</a>. Panduan paling ringkas untuk alur embedding → indeks → query; kita akan memakainya lagi di sesi 3 dan 4.</p>
+
+<p class="small">Rujukan tambahan: <a href="https://developers.cloudflare.com/workers-ai/models/bge-m3/">halaman model bge-m3</a> dan <a href="https://developers.cloudflare.com/workers-ai/platform/pricing/">harga Workers AI</a>.</p>
+
+<div class="next">
+	<span class="label">Sesi berikutnya</span>
+	<p><strong>Sesi 3 — Memasukkan korpus:</strong> ekstraksi PDF/markdown dengan <code>toMarkdown</code>, chunking dengan overlap, ID deterministik supaya ingestion bisa diulang, dan Workflow supaya tidak menabrak batas CPU.</p>
+</div>
+
+<div class="next">
+	<span class="label">Tanya gurunya</span>
+	<p>Bingung kenapa harus R2 kalau teksnya toh disimpan di D1? Atau kenapa <code>remote: true</code> tidak dipakai di produksi? Tanya — jawabannya pendek, tapi mengubah banyak keputusan nanti.</p>
+</div>
+
+<div class="foot">
+	<span>RAG di Cloudflare · Sesi 2 dari 7</span>
+	<span><a href="0003-ingestion.html">Sesi 3 →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

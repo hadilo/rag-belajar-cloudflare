@@ -30,6 +30,16 @@ Sumber yang dipakai untuk menyusun materi. Semua klaim teknis di lesson harus bi
   5 juta token ingestion + 1000 query/bulan termasuk; billing mulai 1 Des 2026. Berguna untuk perbandingan biaya.
 - [AI Search: Chunking](https://developers.cloudflare.com/ai-search/configuration/indexing/chunking/)
   Penjelasan recursive chunking dan trade-off chunk size/overlap (0–30%). Bagus sebagai rujukan konsep walau kita bangun manual.
+- [Workers AI: Markdown Conversion (binding)](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/usage/binding/)
+  `env.AI.toMarkdown()` untuk PDF/gambar → markdown, termasuk OCR. Dipakai di sesi 3.
+- [Model: bge-reranker-base](https://developers.cloudflare.com/workers-ai/models/bge-reranker-base/)
+  Bentuk input `{ query, contexts, top_k }` dan respons berbasis indeks konteks. Dipakai di sesi 4.
+- [AI Gateway: Workers binding](https://developers.cloudflare.com/ai-gateway/usage/worker-binding-methods/)
+  Opsi `gateway` pada `env.AI.run()` (id, cacheTtl, metadata) dan `aiGatewayLogId`. Dipakai di sesi 6–7.
+- [R2: Event notifications](https://developers.cloudflare.com/r2/buckets/event-notifications/)
+  Memicu Queue saat objek baru masuk — dasar ingestion otomatis di sesi 7.
+- [Cloudflare Access: HTTP applications](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/)
+  Login di depan Worker tanpa mengubah kode. Opsi autentikasi di sesi 7.
 - [AI Gateway](https://developers.cloudflare.com/ai-gateway/)
   Caching, rate limiting, logging, fallback. Untuk sesi produksi.
 - [Reference architecture: RAG di Cloudflare](https://developers.cloudflare.com/reference-architecture/diagrams/ai/ai-rag/)
@@ -60,3 +70,4 @@ Sumber yang dipakai untuk menyusun materi. Semua klaim teknis di lesson harus bi
 
 - Belum ada sumber otoritatif khusus "RAG Bahasa Indonesia" (stemming, tokenizer, evaluasi multibahasa). Saat ini mengandalkan klaim multibahasa bge-m3 dan pengujian sendiri.
 - Belum ada benchmark publik untuk kualitas reranker `bge-reranker-base` pada teks Indonesia — perlu diukur sendiri di sesi evaluasi.
+- Dukungan FTS5 di D1 tidak dinyatakan eksplisit di dokumentasi resmi (hanya disebut sebagai SQLite). Sesi 4 karena itu meminta pembaca menguji `CREATE VIRTUAL TABLE` sendiri sebelum mengandalkannya, dan menyediakan fallback skor kata kunci.

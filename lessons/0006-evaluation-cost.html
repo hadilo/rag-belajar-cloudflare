@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sesi 6 — Mengukur: angka sebelum opini</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="page">
+
+<nav class="crumbs">
+	<a href="../index.html">Daftar sesi</a> · Sesi 6 ·
+	<a href="../reference/rag-pipeline-map.html">Cheat sheet</a>
+</nav>
+
+<div class="kicker">Sesi 6 · evaluasi dan biaya</div>
+<h1>Angka sebelum opini</h1>
+<p class="lede">"Terasa lebih baik" bukan bukti. Sesi ini mengubah sepuluh pertanyaan yang kamu tulis di sesi 1 menjadi empat angka, lalu memakai angka itu untuk memutuskan apa yang layak diperbaiki.</p>
+
+<p class="meta">
+	<span>±15 menit</span>
+	<span>Prasyarat: Sesi 5 dan <code>eval/questions.md</code> terisi</span>
+	<span>Hasil: baseline terukur + biaya per pertanyaan</span>
+</p>
+
+<h2>1 · Empat angka yang cukup</h2>
+
+<table>
+<thead><tr><th>Metrik</th><th>Pertanyaan yang dijawab</th><th>Cara hitung</th></tr></thead>
+<tbody>
+<tr><td><strong>hit@k</strong></td><td>Apakah chunk yang benar masuk kandidat?</td><td>Persentase pertanyaan yang file sumbernya muncul di k teratas</td></tr>
+<tr><td><strong>MRR</strong></td><td>Seberapa tinggi posisi chunk benar?</td><td>Rata-rata <code>1/rank</code> kemunculan pertama yang benar</td></tr>
+<tr><td><strong>Validitas sitasi</strong></td><td>Apakah jawaban menunjuk sumber nyata?</td><td>Persentase jawaban yang semua sitasinya ada di daftar sumber terambil</td></tr>
+<tr><td><strong>Penolakan benar</strong></td><td>Apakah sistem berani bilang tidak tahu?</td><td>Pertanyaan di luar korpus dijawab dengan penolakan, bukan karangan</td></tr>
+</tbody>
+</table>
+
+<p>Dua yang pertama mengukur retrieval. Dua yang terakhir mengukur generation. Memisahkan keduanya adalah inti dari sesi ini: tanpa pemisahan, kamu tidak tahu harus memperbaiki yang mana.</p>
+
+<h2>2 · Harness evaluasi</h2>
+
+<p>Cukup satu file Node, tanpa dependency. Isi <code>cases</code> dari <code>eval/questions.md</code>.</p>
+
+<pre><code>const BASE = process.env.BASE_URL;
+
+const cases = [
+	{ q: "Apa itu chunk overlap?", source: "catatan/rag.md" },
+	{ q: "Berapa dimensi bge-m3?", source: "catatan/cloudflare.md" },
+	{ q: "Apa warna langit di Mars?", source: null }, // harus ditolak
+];
+
+function mrr(ranks) {
+	const scored = ranks.map((r) =&gt; (r &gt; 0 ? 1 / r : 0));
+	return scored.reduce((a, b) =&gt; a + b, 0) / scored.length;
+}
+
+let hits = 0;
+const ranks = [];
+
+for (const c of cases) {
+	const res = await fetch(`${BASE}/search?q=${encodeURIComponent(c.q)}`);
+	const { results } = await res.json();
+
+	const rank = results.findIndex((r) =&gt; r.source === c.source) + 1;
+	ranks.push(c.source ? rank : 0);
+	if (c.source &amp;&amp; rank &gt; 0) hits += 1;
+
+	const chat = await fetch(`${BASE}/chat`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ question: c.q }),
+	});
+	const { answer, sources } = await chat.json();
+
+	const cited = [...answer.matchAll(/\[([^\]]+)\]/g)].map((m) =&gt; m[1]);
+	const invalid = cited.filter((s) =&gt; !sources.includes(s));
+	const refused = /tidak ada di dokumen/i.test(answer);
+
+	console.log(JSON.stringify({
+		q: c.q,
+		rank,
+		invalid,
+		refused,
+		expected_refusal: c.source === null,
+	}));
+}
+
+console.log("hit@6:", hits / cases.filter((c) =&gt; c.source).length);
+console.log("mrr:", mrr(ranks));</code></pre>
+
+<p>Jalankan setiap kali kamu mengubah chunking, topK, prompt, atau model. Simpan hasilnya dalam file dengan tanggal — bukan di kepala.</p>
+
+<div class="note">
+	<span class="label">Kenapa bukan LLM-as-judge dulu</span>
+	<p>Menilai jawaban dengan model lain menambah biaya, latency, dan bias yang sulit dilacak. Untuk 10–30 pertanyaan, mata manusia lebih akurat. Pakai judge otomatis setelah korpusmu terlalu besar untuk diperiksa manual, dan kalibrasi dulu dengan penilaianmu sendiri.</p>
+</div>
+
+<h2>3 · Membaca hasil: di lapisan mana gagal?</h2>
+
+<table>
+<thead><tr><th>Yang terlihat</th><th>Lapisan</th><th>Tindakan</th></tr></thead>
+<tbody>
+<tr><td>File sumber tidak muncul di top-20</td><td>Retrieval</td><td>Chunking, hybrid, topK, ganti model embedding</td></tr>
+<tr><td>Muncul di top-20 tapi hilang setelah rerank</td><td>Reranker</td><td>Naikkan <code>top_k</code>, ganti model reranker, periksa pemetaan indeks</td></tr>
+<tr><td>File benar ada di konteks, jawaban tetap salah</td><td>Generation</td><td>Prompt, urutan konteks, model, <code>max_tokens</code> terlalu kecil</td></tr>
+<tr><td>Jawaban benar tapi sitasi salah</td><td>Generation</td><td>Format label sumber, aturan sitasi, verifikasi di kode</td></tr>
+<tr><td>Pertanyaan di luar korpus dijawab percaya diri</td><td>Generation</td><td>Aturan penolakan, ambang skor, konteks yang terlalu longgar</td></tr>
+</tbody>
+</table>
+
+<p>Urutannya selalu dari atas ke bawah. Memperbaiki prompt saat retrieval masih meleset sama dengan mengecat dinding yang belum dibangun.</p>
+
+<h2>4 · Biaya: rumus dan angka nyata</h2>
+
+<pre><code>biaya = (token_input × harga_input + token_output × harga_output) / 1.000.000</code></pre>
+
+<p>Asumsi: 6 chunk × 400 token = 2.400 token konteks, 300 token instruksi + riwayat, output 300 token. Total input ≈ 2.700 token.</p>
+
+<table>
+<thead><tr><th>Model</th><th>Per pertanyaan</th><th>1.000 pertanyaan</th></tr></thead>
+<tbody>
+<tr><td><code>granite-4.0-h-micro</code></td><td>≈ $0,00008</td><td>≈ $0,08</td></tr>
+<tr><td><code>qwen3-30b-a3b-fp8</code></td><td>≈ $0,00024</td><td>≈ $0,24</td></tr>
+<tr><td><code>glm-4.7-flash</code></td><td>≈ $0,00028</td><td>≈ $0,28</td></tr>
+<tr><td><code>llama-3.3-70b-fp8-fast</code></td><td>≈ $0,00147</td><td>≈ $1,47</td></tr>
+<tr><td><code>gemma-sea-lion-v4-27b</code></td><td>≈ $0,00111</td><td>≈ $1,11</td></tr>
+</tbody>
+</table>
+
+<p>Tiga hal yang biasanya mengejutkan:</p>
+
+<ul>
+	<li><strong>Output mendominasi.</strong> Harga output 5–10× harga input. Memangkas <code>max_tokens</code> dari 1.000 ke 400 menghemat lebih banyak daripada memotong dua chunk.</li>
+	<li><strong>Retrieval bukan biaya utama.</strong> Embedding seluruh korpus 1 juta token hanya sekitar $0,012.</li>
+	<li><strong>Reranker hampir gratis.</strong> $0,003 per juta token; 20 chunk pendek per pertanyaan tidak terasa di tagihan.</li>
+</ul>
+
+<h2>5 · Observability dengan AI Gateway</h2>
+
+<p>Agar biaya bisa diatribusikan, lewatkan panggilan model melalui gateway dan sertakan metadata:</p>
+
+<pre><code>const res = await env.AI.run(model, input, {
+	gateway: {
+		id: "rag",
+		metadata: { experiment: "rerank-on", question_id: id },
+	},
+});
+
+const logId = env.AI.aiGatewayLogId;</code></pre>
+
+<p>Dengan begitu kamu bisa membandingkan biaya dan latency antar eksperimen tanpa menebak. Nilai metadata harus string.</p>
+
+<h2>6 · Eksperimen yang layak dilakukan</h2>
+
+<table>
+<thead><tr><th>Ubah satu hal</th><th>Metrik yang seharusnya bergerak</th><th>Risiko</th></tr></thead>
+<tbody>
+<tr><td>Chunk 1.200 → 800 karakter</td><td>hit@20 naik untuk pertanyaan spesifik</td><td>Konteks per chunk berkurang, jawaban bisa terpotong</td></tr>
+<tr><td>topK 20 → 30</td><td>hit@6 setelah rerank naik</td><td>Latency rerank naik</td></tr>
+<tr><td>Reranker mati → hidup</td><td>hit@6 naik, jawaban lebih fokus</td><td>+100–300 ms</td></tr>
+<tr><td>qwen3-30b → llama-70b</td><td>Validitas jawaban naik (kalau gagalnya di generation)</td><td>Biaya 6× lebih tinggi</td></tr>
+</tbody>
+</table>
+
+<p>Ubah satu variabel per run. Kalau kamu mengubah chunking dan model sekaligus, kamu tidak akan tahu mana yang menolong — dan kemungkinan besar akan menyimpulkan hal yang salah.</p>
+
+<h2>7 · Latihan</h2>
+
+<ol>
+	<li>Jalankan harness, catat <code>hit@6</code>, MRR, dan validitas sitasi sebagai baseline bertanggal.</li>
+	<li>Lakukan satu eksperimen dari tabel di atas.</li>
+	<li>Tulis dua kalimat: apa yang berubah, dan apakah kamu akan mempertahankannya.</li>
+	<li>Hitung biaya 1.000 pertanyaan dengan model yang kamu pakai.</li>
+</ol>
+
+<div class="win">
+	<span class="label">Hasil sesi ini</span>
+	<p>Kamu punya baseline yang bisa dibandingkan, tahu di lapisan mana sistem gagal, dan tahu harga satu pertanyaan dalam rupiah maupun dolar.</p>
+</div>
+
+<h2>8 · Cek pemahaman</h2>
+
+<details>
+	<summary>Dari memori: file sumber benar muncul di konteks, tapi jawaban tetap salah. Apa yang kamu periksa lebih dulu?</summary>
+	<p>Bukan retrieval — itu sudah terbukti benar. Periksa prompt (apakah konteks jelas diberi label), urutan chunk (yang paling relevan sebaiknya di awal), <code>max_tokens</code> (apakah jawaban terpotong), dan baru kemudian model. Kalau jawaban tetap salah dengan konteks yang tepat, biasanya masalahnya instruksi, bukan kapasitas model.</p>
+</details>
+
+<div class="quiz">
+
+	<div class="quiz-q" data-answer="1" data-explain="hit@k hanya melihat apakah file sumber muncul di kandidat. Ia tidak menilai jawaban sama sekali, jadi ia mengukur kualitas retrieval secara terpisah.">
+		<p class="q-text">1. Metrik mana yang mengukur retrieval saja?</p>
+		<div class="opts">
+			<button class="opt" type="button">Validitas sitasi pada jawaban akhir</button>
+			<button class="opt" type="button">hit@k dari file sumber yang benar</button>
+			<button class="opt" type="button">Penolakan pada pertanyaan di luar korpus</button>
+			<button class="opt" type="button">Panjang jawaban yang dihasilkan model</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="3" data-explain="Kalau konteks benar tapi jawaban salah, retrieval sudah selesai tugasnya. Yang perlu diperbaiki ada di prompt, urutan konteks, batas token, atau model.">
+		<p class="q-text">2. Konteks benar ada di prompt, jawaban tetap salah. Lapisan mana yang diperbaiki?</p>
+		<div class="opts">
+			<button class="opt" type="button">Chunking dan ukuran overlap</button>
+			<button class="opt" type="button">Indeks vektor dan metrik jarak</button>
+			<button class="opt" type="button">Filter metadata dan namespace</button>
+			<button class="opt" type="button">Prompt, urutan konteks, dan model</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="0" data-explain="Kalau dua variabel berubah bersamaan, perbaikan tidak bisa diatribusikan. Satu variabel per run membuat hasilnya bisa dipercaya dan diulang.">
+		<p class="q-text">3. Kenapa hanya satu variabel diubah per eksperimen?</p>
+		<div class="opts">
+			<button class="opt" type="button">Supaya penyebab perubahan bisa diketahui</button>
+			<button class="opt" type="button">Supaya biaya evaluasi jadi lebih murah</button>
+			<button class="opt" type="button">Supaya harness tidak perlu diubah</button>
+			<button class="opt" type="button">Supaya latency pengujian lebih stabil</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="2" data-explain="Harga output jauh lebih tinggi daripada input. Karena itu membatasi max_tokens biasanya menghemat lebih banyak daripada mengurangi jumlah chunk.">
+		<p class="q-text">4. Komponen biaya mana yang biasanya paling besar?</p>
+		<div class="opts">
+			<button class="opt" type="button">Embedding seluruh korpus saat indexing</button>
+			<button class="opt" type="button">Penyimpanan vektor di Vectorize</button>
+			<button class="opt" type="button">Token output dari model generasi</button>
+			<button class="opt" type="button">Reranking dua puluh kandidat</button>
+		</div>
+	</div>
+
+</div>
+
+<h2>9 · Sumber utama</h2>
+
+<p><a href="https://developers.cloudflare.com/workers-ai/platform/pricing/">Workers AI — Pricing</a>. Tabel harga per model dalam token dan neuron. Ini satu-satunya sumber yang kamu perlukan untuk menghitung biaya; jangan mengandalkan angka dari blog yang mungkin sudah usang.</p>
+
+<p class="small">Rujukan: <a href="https://developers.cloudflare.com/ai-gateway/observability/logging/">AI Gateway — logging</a> · <a href="https://developers.cloudflare.com/ai-gateway/usage/worker-binding-methods/">Workers binding untuk gateway</a>.</p>
+
+<div class="next">
+	<span class="label">Sesi berikutnya</span>
+	<p><strong>Sesi 7 — Produksi:</strong> autentikasi, prompt injection, penghapusan dokumen, migrasi model embedding, dan keputusan jujur: kapan berhenti membangun sendiri dan pindah ke AI Search.</p>
+</div>
+
+<div class="next">
+	<span class="label">Tanya gurunya</span>
+	<p>Angka evaluasimu stagnan? Kirim tabel hasilnya — biasanya polanya langsung terlihat: hit@20 tinggi tapi hit@6 rendah berarti masalah reranker, bukan chunking.</p>
+</div>
+
+<div class="foot">
+	<span>RAG di Cloudflare · Sesi 6 dari 7</span>
+	<span><a href="0007-production.html">Sesi 7 →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

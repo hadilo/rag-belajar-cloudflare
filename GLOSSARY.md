@@ -45,3 +45,35 @@ _Avoid_: "where clause", "tag"
 **top-K**:
 Jumlah chunk teratas yang dikembalikan satu query; batasnya 50 bila metadata/values ikut diminta.
 _Avoid_: "limit hasil", "page size"
+
+## Retrieval lanjutan
+
+**Reranker**:
+Model cross-encoder yang membaca pertanyaan dan chunk bersamaan lalu memberi skor relevansi; akurat tapi mahal per pasangan, jadi dipakai setelah retrieval murah.
+_Avoid_: "penyaring hasil", "scorer"
+
+**Hybrid search**:
+Penggabungan hasil pencarian vektor dengan pencarian leksikal (kata kunci) untuk menangkap kode, nama, dan angka yang tidak tertangkap makna.
+_Avoid_: "dual search", "pencarian ganda"
+
+**RRF (Reciprocal Rank Fusion)**:
+Cara menggabungkan beberapa daftar peringkat memakai posisi, bukan skor mentah, sehingga skor dari sistem berbeda tidak perlu dinormalkan.
+_Avoid_: "score averaging", "penggabungan skor"
+
+**Namespace**:
+Partisi di dalam satu indeks Vectorize yang menyaring kandidat paling awal; dipakai untuk isolasi per pengguna atau tenant.
+_Avoid_: "folder", "collection"
+
+**Chunk overlap**:
+Bagian teks yang sengaja diulang di antara dua chunk berdekatan agar kalimat yang terpotong tetap utuh di salah satunya.
+_Avoid_: "duplikasi", "padding"
+
+## Operasional
+
+**Idempotent**:
+Sifat operasi yang menghasilkan keadaan akhir sama walau dijalankan berulang; pada ingestion dicapai lewat ID vektor yang stabil.
+_Avoid_: "repeatable", "safe retry"
+
+**Failed retrieval**:
+Kasus ketika chunk yang memuat jawaban tidak masuk kandidat yang dikirim ke model — kegagalan di lapisan retrieval, bukan generation.
+_Avoid_: "hallucination", "jawaban salah"

@@ -20,13 +20,23 @@ Bukan tutorial salin-tempel: tiap sesi punya satu konsep, satu latihan konkret, 
 
 ## Mulai dari
 
-Buka `lessons/0001-mental-model-rag.html`, atau langsung ke `reference/rag-pipeline-map.html` untuk peta satu halaman.
+Versi web: <https://hadilo.github.io/rag-belajar-cloudflare/>. Atau langsung buka `lessons/0001-mental-model-rag.html`. Untuk peta satu halaman: `reference/rag-pipeline-map.html`.
 
 ## Status
 
-Sesi 1 dari 7 — model mental dan peta pipeline.
+Tujuh sesi selesai.
 
-Rencana: setup Worker → chunking & ingestion → retrieval → generation + sitasi → evaluasi & biaya → produksi.
+| Sesi | Topik | Hasil |
+|------|-------|-------|
+| 1 | Model mental | Peta pipeline + set pertanyaan uji |
+| 2 | Panggilan pertama | Worker ter-deploy yang mengembalikan vektor |
+| 3 | Ingestion | Korpus terindeks, idempotent |
+| 4 | Retrieval | Endpoint `/search` yang bisa diaudit |
+| 5 | Generation | Chat streaming dengan sitasi |
+| 6 | Evaluasi & biaya | Baseline terukur + biaya per pertanyaan |
+| 7 | Produksi | Checklist + keputusan bangun vs managed |
+
+Referensi: `reference/rag-pipeline-map.html` (cheat sheet) dan `reference/code-cookbook.html` (semua snippet).
 
 ## Catatan versi
 
