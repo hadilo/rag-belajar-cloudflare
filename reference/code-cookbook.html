@@ -23,11 +23,14 @@
 
 <pre data-file="struktur project"><code>rag-belajar/
 ├── src/
-│   ├── index.ts      # route Hono + export ulang IngestWorkflow
-│   ├── ingest.ts     # extract(), chunkText(), IngestWorkflow
+│   ├── index.ts      # route + seed (tanpa framework)
+│   ├── ai.ts         # wrapper panggilan model + cast tipe
+│   ├── ingest.ts     # extract, chunkText, sha256, ingestDoc
 │   ├── search.ts     # embedding query, join D1, rerank, RRF
 │   ├── chat.ts       # prompt, generation, verifikasi sitasi
 │   └── prompt.ts     # konstanta SYSTEM
+├── test/
+│   └── api.test.mjs  # test black-box HTTP
 ├── scripts/
 │   └── eval.mjs      # harness evaluasi
 ├── schema.sql
@@ -100,11 +103,23 @@ CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
 
 <h2>4 · Embedding</h2>
 
-<pre data-file="src/ingest.ts"><code>const { data, shape } = await env.AI.run("@cf/baai/bge-m3", {
-  text: ["satu string", "atau array string"],
-});
-// shape: [jumlah input, 1024]
-// data: [[...1024 angka], ...]</code></pre>
+<pre data-file="src/ingest.ts"><code>const vectors = await embed(env, ["satu string", "atau array string"]);
+// vectors: number[][], masing-masing 1024 angka
+// urutan hasil sama dengan urutan input</code></pre>
+
+<p class="small">Wrapper di <code>src/ai.ts</code> mengisolasi cast tipe, karena tipe hasil <code>wrangler types</code> untuk model ini tidak akurat (input reranker kehilangan <code>query</code>, output embedding berupa union). Jangan memanggil <code>env.AI.run</code> langsung dari modul domain.</p>
+
+<pre data-file="src/ai.ts"><code>type AnyRun = (model: string, input: unknown, options?: unknown) =&gt; Promise&lt;unknown&gt;;
+
+function run(env: Env): AnyRun {
+	// `.bind` penting: env.AI.run bergantung pada `this`.
+	return env.AI.run.bind(env.AI) as unknown as AnyRun;
+}
+
+export async function embed(env: Env, text: string[]): Promise&lt;number[][]&gt; {
+	const out = (await run(env)("@cf/baai/bge-m3", { text })) as { data?: number[][] };
+	return out.data ?? [];
+}</code></pre>
 
 <h2>5 · Chunking</h2>
 
@@ -126,68 +141,106 @@ CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);</code></pre>
 
 <h2>6 · Ekstraksi</h2>
 
-<pre data-file="src/ingest.ts"><code>const obj = await env.DOCS.get(key);
-if (!obj) throw new Error(`Tidak ada objek: ${key}`);
+<pre data-file="src/ingest.ts"><code>export class ObjectNotFoundError extends Error {
+	constructor(key: string) {
+		super(`Tidak ada objek: ${key}`);
+		this.name = "ObjectNotFoundError";
+	}
+}
 
-const [result] = await env.AI.toMarkdown([
-  {
-    name: key,
-    blob: new Blob([await obj.arrayBuffer()]),
-  },
-]);
+export async function extract(env: Env, key: string) {
+	const obj = await env.DOCS.get(key);
+	if (!obj) throw new ObjectNotFoundError(key);
 
-if (!result) throw new Error(`Konversi gagal: ${key}`);
-if (result.format === "error") throw new Error(result.error);
-const text = result.data;</code></pre>
+	if (/\.(md|txt|markdown)$/i.test(key)) return await obj.text();
 
-<h2>7 · Ingestion (Workflow)</h2>
+	const [result] = await env.AI.toMarkdown([
+		{ name: key, blob: new Blob([await obj.arrayBuffer()]) },
+	]);
 
-<pre data-file="src/ingest.ts"><code>import { WorkflowEntrypoint } from "cloudflare:workers";
-import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
-
-export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&gt; {
-  async run(event: WorkflowEvent&lt;{ key: string }&gt;, step: WorkflowStep) {
-    const { key } = event.payload;
-
-    const chunks = await step.do("extract + chunk", async () =&gt; {
-      const text = await extract(this.env, key);
-      return chunkText(text);
-    });
-
-    for (let i = 0; i &lt; chunks.length; i += 20) {
-      await step.do(`embed ${i}`, async () =&gt; {
-        const batch = chunks.slice(i, i + 20);
-        const { data } = await this.env.AI.run("@cf/baai/bge-m3", { text: batch });
-
-        await this.env.INDEX.upsert(
-          batch.map((_, j) =&gt; ({
-            id: `${key}#${i + j}`,
-            values: data[j],
-            metadata: { source: key, chunk: i + j },
-          })),
-        );
-
-        await this.env.DB.batch(
-          batch.map((text, j) =&gt;
-            this.env.DB.prepare(
-              `INSERT OR REPLACE INTO chunks
-               (id, source, chunk_index, text, hash, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)`,
-            ).bind(`${key}#${i + j}`, key, i + j, text, "", Date.now()),
-          ),
-        );
-      });
-    }
-  }
+	if (!result) throw new Error(`Konversi gagal: ${key}`);
+	if (result.format === "error") throw new Error(result.error);
+	return result.data;
 }</code></pre>
 
-<p class="small">Tambahkan hash isi untuk melewati chunk yang tidak berubah. Batch 20 menjaga tiap langkah tetap pendek dan bisa di-retry.</p>
+<p class="small">Teks polos dibaca langsung; <code>toMarkdown</code> hanya untuk PDF/DOCX/gambar. Error khusus dipetakan ke HTTP 404 di route.</p>
+
+<h2>7 · Ingestion</h2>
+
+<pre data-file="src/ingest.ts"><code>export async function ingestDoc(env: Env, key: string) {
+	const text = await extract(env, key);
+	const chunks = chunkText(text);
+	let embedded = 0;
+	let skipped = 0;
+
+	for (let i = 0; i &lt; chunks.length; i += 20) {
+		const batch = chunks.slice(i, i + 20);
+		const hashes = await Promise.all(batch.map(sha256));
+		const ids = batch.map((_, j) =&gt; `${key}#${i + j}`);
+
+		const existing = await env.DB.prepare(
+			`SELECT id, hash FROM chunks WHERE id IN (${ids.map(() =&gt; "?").join(",")})`,
+		).bind(...ids).all&lt;{ id: string; hash: string }&gt;();
+
+		const hashById = new Map(existing.results.map((r) =&gt; [r.id, r.hash]));
+		const todo: { id: string; chunk: number; text: string; hash: string }[] = [];
+
+		batch.forEach((t, j) =&gt; {
+			if (hashById.get(ids[j]) === hashes[j]) { skipped += 1; return; }
+			todo.push({ id: ids[j], chunk: i + j, text: t, hash: hashes[j] });
+		});
+
+		if (!todo.length) continue;
+
+		const vectors = await embed(env, todo.map((t) =&gt; t.text));
+
+		await env.INDEX.upsert(
+			todo.map((t, j) =&gt; ({
+				id: t.id,
+				values: vectors[j],
+				metadata: { source: key, chunk: t.chunk },
+			})),
+		);
+
+		await env.DB.batch(
+			todo.map((t) =&gt;
+				env.DB.prepare(
+					`INSERT OR REPLACE INTO chunks
+					 (id, source, chunk_index, text, hash, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?)`,
+				).bind(t.id, key, t.chunk, t.text, t.hash, Date.now()),
+			),
+		);
+
+		embedded += todo.length;
+	}
+
+	// Rekonsiliasi: hapus chunk yang tidak lagi dihasilkan dokumen ini.
+	const expected = new Set(chunks.map((_, i) =&gt; `${key}#${i}`));
+	const { results: existing } = await env.DB.prepare(
+		"SELECT id FROM chunks WHERE source = ?",
+	).bind(key).all&lt;{ id: string }&gt;();
+
+	const orphans = existing.filter((r) =&gt; !expected.has(r.id)).map((r) =&gt; r.id);
+
+	if (orphans.length) {
+		await env.DB.batch(
+			orphans.map((id) =&gt; env.DB.prepare("DELETE FROM chunks WHERE id = ?").bind(id)),
+		);
+		await env.INDEX.deleteByIds(orphans);
+	}
+
+	return { key, chunks: chunks.length, embedded, skipped, deleted: orphans.length };
+}</code></pre>
+
+<p class="small">Batch 20, hash-skip, dan rekonsiliasi semuanya di sini. Di produksi, bungkus fungsi ini dengan Workflow: satu langkah = satu dokumen, sehingga retry tidak mengulang dokumen lain.</p>
 
 <h2>8 · Query</h2>
 
-<pre data-file="src/search.ts"><code>const { data } = await env.AI.run("@cf/baai/bge-m3", { text: [question] });
+<pre data-file="src/search.ts"><code>const [queryVector] = await embed(env, [question]);
+if (!queryVector) throw new Error("embedding gagal");
 
-const { matches } = await env.INDEX.query(data[0], {
+const { matches } = await env.INDEX.query(queryVector, {
   topK: 20,
   returnMetadata: "all",
   filter: { source: { $in: ["catatan/rag.md"] } },
@@ -213,15 +266,22 @@ const candidates = matches.flatMap((m) =&gt; {
 
 <h2>10 · Rerank</h2>
 
-<pre data-file="src/search.ts"><code>const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
+<pre data-file="src/search.ts"><code>const response = await env.AI.run("@cf/baai/bge-reranker-base", {
   query: question,
   contexts: candidates.map((c) =&gt; ({ text: c.text })),
   top_k: 6,
 });
 
 const top = response
-  .map((r) =&gt; ({ ...candidates[r.id], rerankScore: r.score }))
+  .map((r, idx) =&gt; {
+    const index = typeof r.id === "number" ? r.id : idx;
+    const hit = candidates[index];
+    return hit ? { ...hit, rerankScore: r.score ?? 0 } : null;
+  })
+  .filter((h) =&gt; h !== null)
   .sort((a, b) =&gt; b.rerankScore - a.rerankScore);</code></pre>
+
+<p class="small">Bentuk respons: <code>{ id, score }</code>, dengan <code>id</code> = indeks pada <code>contexts</code>. Bungkus dengan <code>try/catch</code>; bila gagal, pakai urutan vektor apa adanya.</p>
 
 <h2>11 · Fusion (hybrid)</h2>
 
@@ -294,7 +354,44 @@ await env.DOCS.delete(source);</code></pre>
 
 <p class="small">Delete Vectorize asinkron: butuh beberapa detik sampai hilang dari hasil query.</p>
 
-<h2>16 · Angka batas</h2>
+<h2>16 · Test API</h2>
+
+<pre data-file="test/api.test.mjs"><code>import { test } from "node:test";
+import assert from "node:assert/strict";
+
+const BASE = process.env.BASE_URL ?? "http://localhost:8787";
+
+async function countFor(source) {
+	const res = await fetch(`${BASE}/health`);
+	const body = await res.json();
+	return body.bySource.find((r) =&gt; r.source === source)?.n ?? 0;
+}
+
+test("ingest is idempotent", async () =&gt; {
+	const run = () =&gt; fetch(`${BASE}/ingest`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ key: "catatan/uji.md" }),
+	}).then((r) =&gt; r.json());
+
+	const before = await countFor("catatan/uji.md");
+	const again = await run();
+	assert.equal(again.embedded, 0);
+	assert.equal(await countFor("catatan/uji.md"), before);
+});
+
+test("missing object returns 404", async () =&gt; {
+	const res = await fetch(`${BASE}/ingest`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ key: "catatan/tidak-ada.md" }),
+	});
+	assert.equal(res.status, 404);
+});</code></pre>
+
+<p class="small">Seam-nya HTTP API, black-box: test tidak mengimpor modul internal. Jalankan dengan <code>npm test</code> saat dev server hidup. Assertion yang bergantung propagasi Vectorize memakai retry, bukan jeda tetap.</p>
+
+<h2>17 · Angka batas</h2>
 
 <table>
 <thead><tr><th>Batas</th><th>Nilai</th></tr></thead>
@@ -310,7 +407,7 @@ await env.DOCS.delete(source);</code></pre>
 </tbody>
 </table>
 
-<h2>17 · Sumber</h2>
+<h2>18 · Sumber</h2>
 <ul>
 	<li><a href="https://developers.cloudflare.com/vectorize/reference/client-api/">Vectorize API</a> · <a href="https://developers.cloudflare.com/vectorize/platform/limits/">Limits</a></li>
 	<li><a href="https://developers.cloudflare.com/workers-ai/models/">Workers AI models</a> · <a href="https://developers.cloudflare.com/workers-ai/platform/pricing/">Pricing</a></li>

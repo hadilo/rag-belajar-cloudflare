@@ -123,13 +123,14 @@
 	<p>Dimensi dan metrik indeks Vectorize <strong>tidak bisa diubah</strong> setelah dibuat. Ganti model embedding berarti membuat indeks baru dan mengisi ulang semua vektor.</p>
 </div>
 
-<h2>5 · Tiga mode kegagalan</h2>
+<h2>5 · Empat mode kegagalan</h2>
 
 <table>
 <thead><tr><th>Gejala</th><th>Penyebab paling sering</th><th>Perbaikan</th></tr></thead>
 <tbody>
 <tr><td>"Saya tidak tahu" padahal ada di dokumen</td><td>Chunk yang benar tidak masuk top-K</td><td>Perbaiki chunking, tambah hybrid search, naikkan topK, tambah reranker</td></tr>
 <tr><td>Jawaban lancar tapi salah</td><td>Konteks terambil tapi tidak lengkap, prompt tidak mewajibkan sitasi</td><td>Overlap, contextual chunk, instruksi "jawab hanya dari konteks"</td></tr>
+<tr><td>Jawaban memakai isi yang sudah dihapus</td><td>Chunk yatim: dokumen menyusut, ID lama tidak pernah dihapus</td><td>Rekonsiliasi setelah ingest: hapus ID yang tidak lagi dihasilkan, dari D1 lalu Vectorize</td></tr>
 <tr><td>Benar tapi lambat dan mahal</td><td>Terlalu banyak chunk dikirim ke LLM</td><td>Rerank lalu batasi 4–6 chunk, cache jawaban, streaming</td></tr>
 </tbody>
 </table>
@@ -153,9 +154,11 @@
 <h2>7 · Checklist produksi</h2>
 
 <ul class="checklist">
-	<li>ID vektor deterministik (<code>hash(source + chunkIndex)</code>) supaya ingestion idempotent.</li>
+	<li>ID vektor deterministik (<code>source#index</code>) supaya ingestion idempotent.</li>
+	<li>Rekonsiliasi chunk lama: hapus di D1 dulu, lalu <code>deleteByIds</code> di Vectorize.</li>
 	<li>Ingestion di Workflow/Queue, bukan di request handler.</li>
 	<li>Metadata index dibuat <em>sebelum</em> vektor pertama di-upsert.</li>
+	<li>Beri waktu propagasi (±1 menit) sebelum menyimpulkan upsert/hapus gagal.</li>
 	<li>Prompt mewajibkan sitasi dan menolak menjawab tanpa konteks.</li>
 	<li>Chunk diperlakukan sebagai input tidak tepercaya (risiko prompt injection dari dokumen).</li>
 	<li>Rate limit + cache di AI Gateway; log pertanyaan yang gagal.</li>

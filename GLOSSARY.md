@@ -74,6 +74,14 @@ _Avoid_: "duplikasi", "padding"
 Sifat operasi yang menghasilkan keadaan akhir sama walau dijalankan berulang; pada ingestion dicapai lewat ID vektor yang stabil.
 _Avoid_: "repeatable", "safe retry"
 
+**Chunk yatim (orphan chunk)**:
+Chunk yang masih tersimpan di D1 dan Vectorize padahal isinya sudah tidak dihasilkan lagi oleh dokumen sumber, biasanya karena dokumen menyusut atau chunking berubah.
+_Avoid_: "chunk lama", "sisa index"
+
+**Rekonsiliasi**:
+Langkah setelah ingestion yang membandingkan ID yang diharapkan dengan ID yang tersimpan, lalu menghapus selisihnya dari D1 dan Vectorize.
+_Avoid_: "cleanup", "sinkronisasi"
+
 **Failed retrieval**:
 Kasus ketika chunk yang memuat jawaban tidak masuk kandidat yang dikirim ke model — kegagalan di lapisan retrieval, bukan generation.
 _Avoid_: "hallucination", "jawaban salah"

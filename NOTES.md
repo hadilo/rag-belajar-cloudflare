@@ -71,6 +71,15 @@ Semua jalur sesi 2–5 dijalankan end-to-end di `rag-app/`. Yang berbeda dari as
 - Reranker mengembalikan `{ id, score }` dengan `id` = indeks `contexts` — sudah dikonfirmasi, bukan lagi caveat.
 - R2 tidak bisa dipakai remote sebelum diaktifkan di dashboard; binding lokal tetap jalan.
 
+## Sinkronisasi materi dengan rag-app (Nov 2026)
+Materi dan cookbook disamakan dengan implementasi yang lulus test:
+- `extract` membaca `.md`/`.txt` langsung, memakai `ObjectNotFoundError` (dipetakan ke 404).
+- Sesi 3 menambah bagian rekonsiliasi chunk yatim, plus pertanyaan kuis dan langkah latihan.
+- Harness sesi 6 memakai field `hits` (bukan `results`) sesuai respons API.
+- Rerank di sesi 4 dan cookbook memakai pemetaan aman `{ id, score }` + fallback.
+- Sesi 2 mencatat keterbatasan tipe hasil `wrangler types` dan pola wrapper `src/ai.ts`.
+- Cookbook menambah wrapper AI, `ingestDoc` lengkap, dan contoh test API.
+
 ## Konvensi materi
 - Setiap blok kode **wajib** punya label nama file lewat `<pre data-file="...">`, ditampilkan oleh CSS `pre[data-file]::before`.
 - Blok yang bukan file diberi label jujur: `terminal` (perintah shell), `respons` (contoh keluaran), `rumus` (notasi).

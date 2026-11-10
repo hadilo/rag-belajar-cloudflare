@@ -1,6 +1,15 @@
+import { embed } from "./ai";
+
+export class ObjectNotFoundError extends Error {
+	constructor(key: string) {
+		super(`Tidak ada objek: ${key}`);
+		this.name = "ObjectNotFoundError";
+	}
+}
+
 export async function extract(env: Env, key: string): Promise<string> {
 	const obj = await env.DOCS.get(key);
-	if (!obj) throw new Error(`Tidak ada objek: ${key}`);
+	if (!obj) throw new ObjectNotFoundError(key);
 
 	// Markdown dan teks polos dibaca apa adanya; format lain lewat toMarkdown.
 	if (/\.(md|txt|markdown)$/i.test(key)) {
@@ -80,9 +89,7 @@ export async function ingestDoc(env: Env, key: string) {
 
 		if (!todo.length) continue;
 
-		const { data } = await env.AI.run("@cf/baai/bge-m3", {
-			text: todo.map((t) => t.text),
-		});
+		const data = await embed(env, todo.map((t) => t.text));
 
 		await env.INDEX.upsert(
 			todo.map((t, j) => ({
@@ -105,5 +112,23 @@ export async function ingestDoc(env: Env, key: string) {
 		embedded += todo.length;
 	}
 
-	return { key, chunks: chunks.length, embedded, skipped };
+	// Rekonsiliasi: chunk yang tidak lagi dihasilkan dokumen ini harus hilang
+	// dari D1 dan Vectorize, bukan hanya dibiarkan sebagai yatim.
+	const expected = new Set(chunks.map((_, i) => `${key}#${i}`));
+	const { results: existing } = await env.DB.prepare(
+		"SELECT id FROM chunks WHERE source = ?",
+	)
+		.bind(key)
+		.all<{ id: string }>();
+
+	const orphans = existing.filter((r) => !expected.has(r.id)).map((r) => r.id);
+
+	if (orphans.length) {
+		await env.DB.batch(
+			orphans.map((id) => env.DB.prepare("DELETE FROM chunks WHERE id = ?").bind(id)),
+		);
+		await env.INDEX.deleteByIds(orphans);
+	}
+
+	return { key, chunks: chunks.length, embedded, skipped, deleted: orphans.length };
 }

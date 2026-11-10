@@ -1,7 +1,6 @@
 import { SYSTEM } from "./prompt";
+import { generate, generateStream } from "./ai";
 import type { Hit } from "./search";
-
-export const MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
 
 export function buildMessages(question: string, hits: Hit[]) {
 	const context = hits
@@ -30,13 +29,7 @@ export function verifyCitations(answer: string, hits: Hit[]) {
 }
 
 export async function answer(env: Env, question: string, hits: Hit[]) {
-	const res = await env.AI.run(MODEL, {
-		messages: buildMessages(question, hits),
-		max_tokens: 512,
-		temperature: 0.2,
-	});
-
-	const text = (res as { response?: string }).response ?? "";
+	const text = await generate(env, buildMessages(question, hits));
 
 	return {
 		answer: text,
@@ -46,10 +39,5 @@ export async function answer(env: Env, question: string, hits: Hit[]) {
 }
 
 export async function streamAnswer(env: Env, question: string, hits: Hit[]) {
-	return env.AI.run(MODEL, {
-		messages: buildMessages(question, hits),
-		stream: true,
-		max_tokens: 512,
-		temperature: 0.2,
-	});
+	return generateStream(env, buildMessages(question, hits));
 }

@@ -17,6 +17,7 @@ Bukan tutorial salin-tempel: tiap sesi punya satu konsep, satu latihan konkret, 
 | `GLOSSARY.md` | Kosakata kanonik workspace |
 | `learning-records/` | Catatan insight dan prior knowledge |
 | `NOTES.md` | Preferensi belajar dan keputusan kurikulum |
+| `rag-app/` | Implementasi Worker yang berjalan + test API |
 
 ## Mulai dari
 
@@ -37,6 +38,8 @@ Tujuh sesi selesai.
 | 7 | Produksi | Checklist + keputusan bangun vs managed |
 
 Referensi: `reference/rag-pipeline-map.html` (cheat sheet) dan `reference/code-cookbook.html` (semua snippet).
+
+Implementasi `rag-app/` mengikuti kode di sesi 2–5 dan dipakai untuk memverifikasinya: 4 test API hijau, typecheck bersih. Materi sudah disinkronkan dengan implementasi tersebut, termasuk rekonsiliasi chunk yatim.
 
 ## Catatan versi
 

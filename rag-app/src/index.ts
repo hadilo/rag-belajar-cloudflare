@@ -1,4 +1,5 @@
-import { ingestDoc } from "./ingest";
+import { ingestDoc, ObjectNotFoundError } from "./ingest";
+import { embed } from "./ai";
 import { search, rrf, lexicalRank } from "./search";
 import { answer, streamAnswer } from "./chat";
 
@@ -97,11 +98,9 @@ export default {
 
 			if (path === "/debug/upsert" && request.method === "GET") {
 				const id = url.searchParams.get("id") ?? "debug-1";
-				const { data } = await env.AI.run("@cf/baai/bge-m3", { text: ["tes vektor"] });
-				const res = await env.INDEX.upsert([
-					{ id, values: data[0], metadata: { source: "debug" } },
-				]);
-				return json({ id, dimensions: data[0].length, res });
+				const [vector] = await embed(env, ["tes vektor"]);
+				const res = await env.INDEX.upsert([{ id, values: vector, metadata: { source: "debug" } }]);
+				return json({ id, dimensions: vector.length, res });
 			}
 
 			if (path === "/debug/rrf" && request.method === "GET") {
@@ -161,6 +160,9 @@ export default {
 
 			return json({ error: "not found", path }, 404);
 		} catch (err) {
+			if (err instanceof ObjectNotFoundError) {
+				return json({ error: err.message }, 404);
+			}
 			return json({ error: String(err) }, 500);
 		}
 	},

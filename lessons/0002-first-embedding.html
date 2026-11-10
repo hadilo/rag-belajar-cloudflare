@@ -70,6 +70,11 @@ cd rag-belajar</code></pre>
 
 <p>Perintah itu menghasilkan tipe untuk <code>env</code> dari binding yang kamu deklarasikan. Kalau nanti <code>env.AI</code> dianggap tidak ada oleh TypeScript, hampir selalu jawabannya: <code>wrangler types</code> belum dijalankan.</p>
 
+<div class="warn">
+	<span class="label">Tipe generate tidak selalu lengkap</span>
+	<p>Pada Wrangler 4.160, tipe untuk sebagian model AI tidak akurat: input <code>bge-reranker-base</code> kehilangan properti <code>query</code>, dan output embedding berupa union. Jangan menyebar <code>as any</code>. Isolasi cast di satu modul pembungkus (<code>src/ai.ts</code>) dengan komentar alasannya, lalu pakai <code>tsc --noEmit</code> sebagai gerbang. <code>rag-app</code> melakukan ini supaya <code>npm run typecheck</code> tetap hijau.</p>
+</div>
+
 <h2>3 · Panggilan pertama</h2>
 
 <p>Ganti isi <code>src/index.ts</code>:</p>

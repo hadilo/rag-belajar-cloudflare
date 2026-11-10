@@ -10,7 +10,7 @@ R2 ──► chunk ──► bge-m3 ──► Vectorize
 pertanyaan ──► bge-m3 ──► query ─┘──► rerank ──► prompt ──► LLM ──► jawaban + sitasi
 ```
 
-**Status:** terverifikasi end-to-end pada 10 November 2026 — 5 chunk dari 4 dokumen, ingest idempoten, filter metadata, rerank, jawaban bersitasi, penolakan di luar korpus, dan streaming SSE.
+**Status:** terverifikasi end-to-end pada 10 November 2026 — 5 chunk dari 4 dokumen, ingest idempoten, filter metadata, rerank, jawaban bersitasi, penolakan di luar korpus, dan streaming SSE. 4 test API hijau (`npm test`).
 
 ---
 
@@ -138,6 +138,15 @@ npx wrangler r2 object put rag-docs/catatan/buku.md --file ./buku.md --local
 curl -X POST localhost:8787/ingest -H 'content-type: application/json' -d '{"all":true}'
 ```
 
+Ingest bersifat rekonsiliasi: chunk yang tidak lagi dihasilkan dokumen (karena isinya menyusut atau chunking berubah) dihapus dari D1 dan Vectorize. Respons menyertakan `deleted` berisi jumlah chunk yang dibersihkan.
+
+**Uji dan typecheck**
+
+```bash
+npm test        # butuh dev server berjalan di localhost:8787
+npm run typecheck
+```
+
 **Mulai bersih**
 
 ```bash
@@ -155,6 +164,8 @@ Dimensi terkunci, jadi ini migrasi: buat indeks baru → backfill seluruh korpus
 |---|---|---|
 | `/search` mengembalikan 0 hasil padahal ingest sukses | Mutasi Vectorize belum diproses | Tunggu 40–60 detik, ulangi |
 | Filter `source=` selalu kosong | Vektor di-upsert sebelum metadata index siap | Upsert ulang, tunggu ±1 menit |
+| Jawaban memakai isi dokumen lama | Chunk yatim dari versi sebelumnya | Ingest ulang; rekonsiliasi menghapusnya |
+| `/ingest` mengembalikan 404 | Key tidak ada di R2 | Periksa `wrangler r2 object list` |
 | `curl` ke `/chat` tidak mengalir | `curl` tanpa `-N` | Tambahkan `-N` |
 | `wrangler r2` gagal `code: 10042` | R2 belum diaktifkan di dashboard | Aktifkan R2, atau tetap pakai mode lokal |
 | `npm install` gagal `ENOSPC` | Disk penuh | Kosongkan ruang; kode ini juga jalan dengan Wrangler dari cache |

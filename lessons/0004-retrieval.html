@@ -90,7 +90,7 @@ const candidates = matches.flatMap((m) =&gt; {
 
 <p>Karena itu polanya selalu dua tahap: ambil banyak dengan cara murah, saring dengan cara mahal.</p>
 
-<pre data-file="src/search.ts"><code>const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
+<pre data-file="src/search.ts"><code>const response = await env.AI.run("@cf/baai/bge-reranker-base", {
 	query: question,
 	contexts: candidates.map((c) =&gt; ({ text: c.text })),
 	top_k: 6,
@@ -98,7 +98,12 @@ const candidates = matches.flatMap((m) =&gt; {
 
 // Item respons merujuk ke indeks pada array contexts.
 const top = response
-	.map((r) =&gt; ({ ...candidates[r.id], rerankScore: r.score }))
+	.map((r, idx) =&gt; {
+		const index = typeof r.id === "number" ? r.id : idx;
+		const hit = candidates[index];
+		return hit ? { ...hit, rerankScore: r.score ?? 0 } : null;
+	})
+	.filter((h) =&gt; h !== null)
 	.sort((a, b) =&gt; b.rerankScore - a.rerankScore);</code></pre>
 
 <p>Biayanya $0,003 per juta token — untuk 20 chunk pendek, praktis nol. Waktu tambahannya ratusan milidetik. Itu trade-off yang hampir selalu layak.</p>
@@ -106,6 +111,7 @@ const top = response
 <div class="note">
 	<span class="label">Bentuk respons (sudah diuji)</span>
 	<p>Responsnya array objek <code>{ id, score }</code>, dengan <code>id</code> sebagai indeks pada array <code>contexts</code>. Contoh nyata: <code>{ "id": 0, "score": 0.9982 }</code>.</p>
+	<p>Kalau reranker gagal, jangan gagalkan pencarian: pakai urutan vektor apa adanya dan tandai <code>reranker: "fallback"</code>. <code>rag-app</code> membungkus panggilan ini dengan <code>try/catch</code> dan mengisolasi cast tipe di <code>src/ai.ts</code>.</p>
 </div>
 
 <h2>5 · Hybrid search: saat kemiripan makna tidak cukup</h2>

@@ -1,3 +1,5 @@
+import { embed, rerank } from "./ai";
+
 export type Hit = {
 	id: string;
 	source: string;
@@ -50,7 +52,11 @@ export async function search(
 	finalK = 6,
 	opts: { source?: string } = {},
 ): Promise<SearchResult> {
-	const { data } = await env.AI.run("@cf/baai/bge-m3", { text: [question] });
+	const vectors = await embed(env, [question]);
+	const queryVector = vectors[0];
+	if (!queryVector) {
+		return { hits: [], matches: 0, candidates: 0, reranker: "no-embedding" };
+	}
 
 	const queryOptions: VectorizeQueryOptions = {
 		topK,
@@ -58,7 +64,7 @@ export async function search(
 	};
 	if (opts.source) queryOptions.filter = { source: opts.source };
 
-	const { matches } = await env.INDEX.query(data[0], queryOptions);
+	const { matches } = await env.INDEX.query(queryVector, queryOptions);
 
 	if (!matches.length) {
 		return { hits: [], matches: 0, candidates: 0, reranker: "no-matches" };
@@ -86,20 +92,21 @@ export async function search(
 	}
 
 	try {
-		const { response } = await env.AI.run("@cf/baai/bge-reranker-base", {
-			query: question,
-			contexts: candidates.map((c) => ({ text: c.text })),
-			top_k: finalK,
-		});
+		const response = await rerank(
+			env,
+			question,
+			candidates.map((c) => ({ text: c.text })),
+			finalK,
+		);
 
 		const items: Hit[] = response
-			.map((r: { id?: number; score: number }, idx: number) => {
+			.map((r, idx): Hit | null => {
 				const index = typeof r.id === "number" ? r.id : idx;
 				const hit = candidates[index];
-				return hit ? { ...hit, rerankScore: r.score } : null;
+				return hit ? { ...hit, rerankScore: r.score ?? 0 } : null;
 			})
-			.filter((h: Hit | null): h is Hit => h !== null)
-			.sort((a: Hit, b: Hit) => (b.rerankScore ?? 0) - (a.rerankScore ?? 0));
+			.filter((h): h is Hit => h !== null)
+			.sort((a, b) => (b.rerankScore ?? 0) - (a.rerankScore ?? 0));
 
 		return {
 			hits: items.slice(0, finalK),

@@ -76,7 +76,12 @@
 	if (ids.length) await env.INDEX.deleteByIds(ids);
 }</code></pre>
 
-<p>Operasi Vectorize bersifat asinkron: penghapusan butuh beberapa detik sebelum benar-benar hilang dari hasil query. Kalau kamu langsung menguji, hasil lama bisa masih muncul — itu normal, bukan bug.</p>
+<p>Operasi Vectorize bersifat asinkron: penghapusan butuh 40–60 detik sebelum benar-benar hilang dari hasil query. Kalau kamu langsung menguji, hasil lama bisa masih muncul — itu normal, bukan bug.</p>
+
+<div class="note">
+	<span class="label">Hapus semua vs rekonsiliasi</span>
+	<p>Fungsi di atas dipakai saat sebuah sumber dihapus sepenuhnya. Untuk dokumen yang <em>berubah</em> — menyusut, atau chunking-nya berganti — jangan hapus semuanya lalu re-index: itu membuang biaya embedding. Cukup rekonsiliasi ID yang tidak lagi dihasilkan (sesi 3), dengan urutan yang sama: D1 dulu, vektor kemudian.</p>
+</div>
 
 <p>Hapus juga objek di R2. Kalau tidak, dokumen "terhapus" masih bisa di-ingest ulang oleh proses berikutnya dan muncul kembali seperti hantu.</p>
 

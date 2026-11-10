@@ -23,6 +23,10 @@ curl -X POST localhost:8787/ingest -H 'content-type: application/json' -d '{"all
 
 # tanya
 curl -X POST 'localhost:8787/chat?format=json' -H 'content-type: application/json' -d '{"question":"..."}'
+
+# verifikasi
+npm test            # butuh dev server berjalan
+npm run typecheck
 ```
 
 Catatan lingkungan: `npm install` bisa gagal karena disk hampir penuh. Wrangler tersedia lewat cache `npx`; jangan menambah dependency baru tanpa memastikan ruang disk cukup.
@@ -52,6 +56,8 @@ Jangan menaruh logika retrieval di `index.ts`; route hanya memanggil fungsi dari
 8. **Rerank mempersempit, bukan memperluas.** Ambil 20 kandidat, kirim 6 chunk ke model.
 9. **Sitasi diverifikasi di kode**, bukan dipercaya dari model. Setiap nama file yang dikutip harus ada di daftar `sources` hasil retrieval.
 10. **Chunk adalah input tidak tepercaya.** Jangan memberi model kemampuan memicu aksi (fetch, tulis DB, kirim pesan) berdasarkan isi dokumen.
+11. **Ingestion harus merekonsiliasi.** Setelah memproses chunk baru, hapus ID lama milik sumber yang sama dari D1 dan Vectorize. Tanpa ini, dokumen yang menyusut meninggalkan chunk yatim yang masih bisa muncul di jawaban.
+12. **Panggilan AI lewat `src/ai.ts`.** Tipe hasil `wrangler types` tidak lengkap (input reranker kehilangan `query`, output embedding berupa union), jadi cast diisolasi di sana. Jangan memanggil `env.AI.run` langsung dari modul domain, dan jangan melepas `run` dari objeknya — `this` hilang dan gagal saat runtime.
 
 ## Konvensi kode
 
@@ -61,6 +67,15 @@ Jangan menaruh logika retrieval di `index.ts`; route hanya memanggil fungsi dari
 - Respons error selalu JSON `{ error: string }` dengan status yang sesuai; jangan melempar error mentah ke klien.
 - `search()` mengembalikan `Hit[]` yang sudah diurutkan. Jangan mengandalkan urutan hasil SQL `IN (...)`.
 - Jangan menambah logging isi dokumen atau pertanyaan pengguna; itu data pribadi dan memakan kuota log.
+
+## Testing
+
+Seam yang disepakati: **HTTP API** (`/ingest`, `/health`, `/search`), black-box, dijalankan terhadap `wrangler dev`. Test tidak boleh mengimpor modul internal atau memeriksa D1 secara langsung — semua lewat endpoint.
+
+- Tulis test merah dulu, baru perbaiki kode.
+- Jangan menguji jawaban LLM secara eksak; itu flaky. Uji perilaku yang deterministik (jumlah chunk, status code, filter, keberadaan ID).
+- Propagasi Vectorize membuat beberapa assertion harus menunggu (`waitFor`), bukan `sleep` tetap. Hasil kosong saat menunggu bukan bukti: sertakan `hits.length > 0` di predicate, kalau tidak `every()` akan lolos secara vacuous.
+- `npm test` membutuhkan dev server berjalan. Jika gagal karena koneksi, itu masalah setup, bukan kode.
 
 ## Alur verifikasi (wajib sebelum menyatakan selesai)
 

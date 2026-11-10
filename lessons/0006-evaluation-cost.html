@@ -60,9 +60,9 @@ const ranks = [];
 
 for (const c of cases) {
 	const res = await fetch(`${BASE}/search?q=${encodeURIComponent(c.q)}`);
-	const { results } = await res.json();
+	const { hits } = await res.json();
 
-	const rank = results.findIndex((r) =&gt; r.source === c.source) + 1;
+	const rank = hits.findIndex((r) =&gt; r.source === c.source) + 1;
 	if (c.source) ranks.push(rank);
 	if (c.source &amp;&amp; rank &gt; 0) hits += 1;
 
@@ -90,6 +90,8 @@ console.log("hit@6:", hits / cases.filter((c) =&gt; c.source).length);
 console.log("mrr:", mrr(ranks));</code></pre>
 
 <p>Jalankan setiap kali kamu mengubah chunking, topK, prompt, atau model. Simpan hasilnya dalam file dengan tanggal — bukan di kepala.</p>
+
+<p class="small">Bentuk responsnya <code>{ hits: [...] }</code>, sama dengan yang dipakai <code>rag-app</code>. Harness ini mengukur kualitas jawaban; untuk mengunci perilaku API (idempotensi, 404, filter), <code>rag-app</code> memakai test black-box terpisah di <code>test/api.test.mjs</code> yang dijalankan dengan <code>npm test</code>.</p>
 
 <div class="note">
 	<span class="label">Kenapa bukan LLM-as-judge dulu</span>

@@ -29,7 +29,7 @@
 <table>
 <thead><tr><th>Keputusan</th><th>Pilihan kita</th><th>Kenapa</th></tr></thead>
 <tbody>
-<tr><td>Ekstraksi</td><td><code>env.AI.toMarkdown()</code></td><td>PDF dan gambar jadi teks terstruktur tanpa library parser di Worker</td></tr>
+<tr><td>Ekstraksi</td><td><code>toMarkdown</code> untuk PDF, teks langsung untuk <code>.md</code>/<code>.txt</code></td><td>Tidak membuang neuron untuk file yang sudah berupa teks</td></tr>
 <tr><td>Pemotongan</td><td>Recursive per paragraf, 1.200 karakter, overlap 200</td><td>Menjaga batas alami teks; chunk terlalu kecil kehilangan konteks</td></tr>
 <tr><td>Identitas</td><td><code>source#index</code> + hash isi</td><td>Upsert menggantikan, bukan menambah; isi tak berubah tidak di-embed ulang</td></tr>
 </tbody>
@@ -39,9 +39,21 @@
 
 <p><code>env.AI.toMarkdown()</code> menerima file dan mengembalikan markdown beserta perkiraan jumlah token. Untuk PDF hasil scan ia menjalankan OCR; untuk gambar, model vision mengekstrak teksnya.</p>
 
-<pre data-file="src/ingest.ts"><code>async function extract(env: Env, key: string) {
+<pre data-file="src/ingest.ts"><code>export class ObjectNotFoundError extends Error {
+	constructor(key: string) {
+		super(`Tidak ada objek: ${key}`);
+		this.name = "ObjectNotFoundError";
+	}
+}
+
+export async function extract(env: Env, key: string): Promise&lt;string&gt; {
 	const obj = await env.DOCS.get(key);
-	if (!obj) throw new Error(`Tidak ada objek: ${key}`);
+	if (!obj) throw new ObjectNotFoundError(key);
+
+	// Markdown dan teks polos dibaca apa adanya; format lain lewat toMarkdown.
+	if (/\.(md|txt|markdown)$/i.test(key)) {
+		return await obj.text();
+	}
 
 	const [result] = await env.AI.toMarkdown([
 		{
@@ -56,6 +68,8 @@
 }</code></pre>
 
 <p class="small">Selalu kirim array, walau hanya satu file: input array mengembalikan array, input objek mengembalikan objek — destructuring akan gagal pada yang kedua.</p>
+
+<p>Untuk <code>.md</code> dan <code>.txt</code>, teks dibaca langsung. <code>toMarkdown</code> hanya dipakai untuk format yang memang perlu dikonversi (PDF, DOCX, gambar), sehingga tidak ada neuron yang terbuang untuk file yang sudah berupa teks. Error khusus <code>ObjectNotFoundError</code> dipetakan menjadi HTTP 404 di route, bukan 500 — objek yang tidak ada adalah kesalahan input, bukan kerusakan server.</p>
 
 <div class="note">
 	<span class="label">Kenapa R2 dulu</span>
@@ -109,17 +123,48 @@
 
 <p>ID vektor: <code>${source}#${i}</code>. Stabil antar-run, jadi <code>upsert</code> menggantikan vektor lama alih-alih menambah duplikat. Hash isi disimpan di D1 untuk melewati chunk yang tidak berubah:</p>
 
-<pre data-file="src/ingest.ts"><code>const hash = await sha256(text);
+<pre data-file="src/ingest.ts"><code>const ids = batch.map((_, j) =&gt; `${key}#${i + j}`);
 const existing = await env.DB
-	.prepare("SELECT hash FROM chunks WHERE id = ?")
-	.bind(id)
-	.first&lt;{ hash: string }&gt;();
+	.prepare(`SELECT id, hash FROM chunks WHERE id IN (${ids.map(() =&gt; "?").join(",")})`)
+	.bind(...ids)
+	.all&lt;{ id: string; hash: string }&gt;();
 
-if (existing?.hash === hash) return null; // tidak perlu di-embed ulang</code></pre>
+const hashById = new Map(existing.results.map((r) =&gt; [r.id, r.hash]));
+const todo = batch.filter((_, j) =&gt; hashById.get(ids[j]) !== hashes[j]);
+
+if (!todo.length) continue; // semua chunk sudah sama</code></pre>
 
 <p>Ini yang membuat ingestion <em>idempotent</em>: menjalankan ulang proses yang sama tidak mengubah keadaan akhir. Tanpa ini, setiap kali kamu meng-upload dokumen yang sama, biaya embedding naik dan hasil pencarian mulai berisi duplikat.</p>
 
-<h2>5 · Skema D1 dan indeks vektor</h2>
+<h2>5 · Rekonsiliasi: hapus yang tidak lagi ada</h2>
+
+<p>Upsert hanya menyentuh ID yang kamu kirim. Kalau dokumen menyusut — atau strategi chunking berubah sehingga jumlah chunk berkurang — ID lama tidak pernah dikirim lagi, dan tidak ada yang menghapusnya. Hasilnya: chunk yatim yang isinya sudah tidak ada di sumber, tetap bisa muncul di jawaban.</p>
+
+<p>Ini bukan teori. Saat menjalankan <code>rag-app</code>, dokumen tiga chunk dipendekkan menjadi satu chunk: D1 masih berisi tiga baris, dan chunk lama tetap menjadi hit teratas. Test API menangkapnya sebagai <code>3 !== 1</code>.</p>
+
+<pre data-file="src/ingest.ts"><code>const expected = new Set(chunks.map((_, i) =&gt; `${key}#${i}`));
+const { results: existing } = await env.DB
+	.prepare("SELECT id FROM chunks WHERE source = ?")
+	.bind(key)
+	.all&lt;{ id: string }&gt;();
+
+const orphans = existing.filter((r) =&gt; !expected.has(r.id)).map((r) =&gt; r.id);
+
+if (orphans.length) {
+	await env.DB.batch(
+		orphans.map((id) =&gt; env.DB.prepare("DELETE FROM chunks WHERE id = ?").bind(id)),
+	);
+	await env.INDEX.deleteByIds(orphans);
+}</code></pre>
+
+<div class="note">
+	<span class="label">Urutan penting</span>
+	<p>Hapus di D1 dulu, baru vektor. Kalau vektor dihapus lebih dulu lalu proses mati, D1 masih mengira chunk itu ada dan ingest berikutnya akan melewatinya karena hash cocok — vektornya hilang permanen. D1 yang sudah bersih juga membuat chunk yatim tidak bisa lagi ditampilkan meski vektornya belum sempat terhapus.</p>
+</div>
+
+<p>Operasi hapus di Vectorize asinkron seperti upsert: beri waktu sebelum menyimpulkan gagal. Di <code>rag-app</code>, respons ingest menyertakan <code>deleted</code> berisi jumlah chunk yang dibersihkan, dan test API memeriksa D1 segera serta Vectorize dengan retry.</p>
+
+<h2>6 · Skema D1 dan indeks vektor</h2>
 
 <pre data-file="schema.sql"><code>CREATE TABLE IF NOT EXISTS chunks (
 	id          TEXT PRIMARY KEY,
@@ -164,79 +209,43 @@ npx wrangler vectorize create-metadata-index rag-index \
 
 <p>String yang bisa difilter hanya 64 byte pertama. Simpan <code>source</code> sebagai path pendek (<code>catatan/rag.md</code>), bukan URL panjang.</p>
 
-<h2>6 · Ingestion sebagai Workflow</h2>
+<h2>7 · Ingestion sebagai Workflow</h2>
 
 <p>Ingestion tidak boleh berjalan di dalam request handler. Workers Free hanya memberi 10 ms CPU per request, dan meng-embed ratusan chunk butuh waktu. Workflow memberi kamu langkah-langkah yang tahan gagal: kalau langkah ke-7 mati, langkah 1–6 tidak diulang.</p>
 
 <pre data-file="src/ingest.ts"><code>import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
+import { ingestDoc } from "./ingest";
 
 export class IngestWorkflow extends WorkflowEntrypoint&lt;Env, { key: string }&gt; {
 	async run(event: WorkflowEvent&lt;{ key: string }&gt;, step: WorkflowStep) {
 		const { key } = event.payload;
 
-		const chunks = await step.do("extract + chunk", async () =&gt; {
-			const text = await extract(this.env, key);
-			return chunkText(text);
+		return await step.do(`ingest ${key}`, async () =&gt; {
+			return ingestDoc(this.env, key);
 		});
-
-		for (let i = 0; i &lt; chunks.length; i += 20) {
-			await step.do(`embed ${i}-${i + 20}`, async () =&gt; {
-				const batch = chunks.slice(i, i + 20);
-				const hashes = await Promise.all(batch.map(sha256));
-
-				const { data } = await this.env.AI.run("@cf/baai/bge-m3", {
-					text: batch,
-				});
-
-				await this.env.INDEX.upsert(
-					batch.map((_, j) =&gt; ({
-						id: `${key}#${i + j}`,
-						values: data[j],
-						metadata: { source: key, chunk: i + j },
-					})),
-				);
-
-				await this.env.DB.batch(
-					batch.map((text, j) =&gt;
-						this.env.DB.prepare(
-							`INSERT OR REPLACE INTO chunks
-							 (id, source, chunk_index, text, hash, created_at)
-							 VALUES (?, ?, ?, ?, ?, ?)`,
-						).bind(
-							`${key}#${i + j}`,
-							key,
-							i + j,
-							text,
-							hashes[j],
-							Date.now(),
-						),
-					),
-				);
-			});
-		}
-
-		return { chunks: chunks.length, key };
 	}
 }</code></pre>
 
-<p>Batch 20 chunk per langkah menjaga tiap langkah pendek dan bisa di-retry tanpa mengulang seluruh dokumen. Upsert maksimal 1.000 vektor per panggilan, jadi 20 jauh di bawah batas.</p>
+<p>Satu langkah = satu dokumen. Kalau langkah itu gagal, Workflow mengulanginya tanpa menyentuh langkah lain. Batch 20 chunk dan rekonsiliasi sudah ada di dalam <code>ingestDoc</code>, jadi tidak diduplikasi di sini. Untuk dokumen yang sangat besar, pecah menjadi beberapa <code>step.do</code> agar retry tidak mengulang seluruh dokumen.</p>
+
+<p class="small">Di <code>rag-app</code>, <code>ingestDoc</code> dipanggil inline dari route supaya bisa diuji tanpa deploy. Workflow ini adalah pembungkus produksinya dan belum dijalankan di sana.</p>
 
 <p>Picu dari route kecil:</p>
 
 <pre data-file="src/index.ts"><code>export { IngestWorkflow } from "./ingest";
 
-app.post("/ingest", async (c) =&gt; {
-	const { key } = await c.req.json&lt;{ key: string }&gt;();
-	if (!key) return c.text("key wajib", 400);
+if (path === "/ingest" &amp;&amp; request.method === "POST") {
+	const { key } = (await request.json()) as { key?: string };
+	if (!key) return json({ error: "key wajib" }, 400);
 
-	const instance = await c.env.INGEST.create({ params: { key } });
-	return c.json({ id: instance.id }, 202);
-});</code></pre>
+	const instance = await env.INGEST.create({ params: { key } });
+	return json({ id: instance.id }, 202);
+}</code></pre>
 
 <p>Baris ekspor itu wajib: Workflow hanya dikenali kalau kelasnya diekspor dari entry module yang ditunjuk <code>main</code> di <code>wrangler.jsonc</code>.</p>
 
-<h2>7 · Latihan</h2>
+<h2>8 · Latihan</h2>
 
 <ol>
 	<li>Upload tiga dokumen ke R2: <code>npx wrangler r2 object put rag-docs/catatan/a.md --file a.md</code>.</li>
@@ -244,15 +253,16 @@ app.post("/ingest", async (c) =&gt; {
 	<li>Catat jumlah baris: <code>npx wrangler d1 execute rag --remote --command "SELECT source, COUNT(*) FROM chunks GROUP BY source"</code>.</li>
 	<li>Jalankan ulang ingestion untuk dokumen yang sama.</li>
 	<li>Pastikan jumlah barisnya <strong>tidak berubah</strong>.</li>
+	<li>Pendekkan salah satu dokumen, ingest ulang, lalu pastikan jumlah chunk-nya <strong>turun</strong> dan respons memuat <code>deleted</code> lebih dari nol.</li>
 	<li>Bonus: integrasikan pemeriksaan hash dari bagian 4 ke dalam langkah embed, supaya chunk yang isinya tidak berubah tidak di-embed ulang.</li>
 </ol>
 
 <div class="win">
 	<span class="label">Hasil sesi ini</span>
-	<p>Korpusmu ada di Vectorize dan D1, dengan ID yang stabil dan ingestion yang bisa diulang kapan saja tanpa menduplikasi data.</p>
+	<p>Korpusmu ada di Vectorize dan D1, dengan ID yang stabil, ingestion yang bisa diulang, dan chunk lama yang ikut terhapus saat dokumen berubah.</p>
 </div>
 
-<h2>8 · Cek pemahaman</h2>
+<h2>9 · Cek pemahaman</h2>
 
 <details>
 	<summary>Dari memori: kenapa ID vektor harus deterministik?</summary>
@@ -301,9 +311,19 @@ app.post("/ingest", async (c) =&gt; {
 		</div>
 	</div>
 
+	<div class="quiz-q" data-answer="0" data-explain="Upsert tidak menghapus ID yang tidak lagi dikirim. Tanpa rekonsiliasi, chunk lama tetap ada di D1 dan Vectorize dan bisa muncul sebagai jawaban.">
+		<p class="q-text">5. Dokumen dipendekkan dari tiga chunk menjadi satu. Apa yang harus dilakukan?</p>
+		<div class="opts">
+			<button class="opt" type="button">Hapus ID lama dari D1 dan indeks</button>
+			<button class="opt" type="button">Biarkan ID lama sampai ada pembersihan manual</button>
+			<button class="opt" type="button">Upsert ulang seluruh korpus tanpa menghapus apa pun</button>
+			<button class="opt" type="button">Naikkan nilai topK agar chunk lama terpakai</button>
+		</div>
+	</div>
+
 </div>
 
-<h2>9 · Sumber utama</h2>
+<h2>10 · Sumber utama</h2>
 
 <p><a href="https://developers.cloudflare.com/workers-ai/guides/tutorials/build-a-retrieval-augmented-generation-ai/">Cloudflare — Build a RAG AI</a>, khususnya bagian workflow dan text splitting. Untuk konteks tambahan soal trade-off chunking: <a href="https://developers.cloudflare.com/ai-search/configuration/indexing/chunking/">AI Search — Chunking</a>.</p>
 
