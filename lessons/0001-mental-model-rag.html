@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sesi 1 — Peta RAG: dua loop yang menentukan segalanya</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="page">
+
+<nav class="crumbs">
+	RAG di Cloudflare · Sesi 1 ·
+	<a href="../reference/rag-pipeline-map.html">Cheat sheet</a>
+</nav>
+
+<div class="kicker">Sesi 1 · model mental</div>
+<h1>Dua loop yang menentukan segalanya</h1>
+<p class="lede">Sebelum satu baris kode: RAG bukan "AI yang membaca dokumenmu". RAG adalah dua pipeline terpisah yang bertemu di satu indeks vektor. Kalau pembagian ini jelas, semua keputusan teknis setelahnya jadi pertanyaan yang bisa dijawab, bukan selera.</p>
+
+<p class="meta">
+	<span>±8 menit</span>
+	<span>Prasyarat: tidak ada</span>
+	<span>Hasil: peta pipeline + set pertanyaan uji</span>
+</p>
+
+<h2>1 · Kenapa RAG ada</h2>
+
+<p>Model bahasa hanya tahu dua hal: isi data latihnya, dan apa pun yang ada di prompt saat itu. Dokumenmu tidak ada di keduanya.</p>
+
+<p>Ada dua cara menambal itu. Pertama, taruh seluruh dokumen di prompt. Ini terlihat sederhana, tapi mahal per pertanyaan, terbatas oleh context window, dan model cenderung mengabaikan bagian tengah konteks yang panjang. Kedua, ambil <em>hanya</em> bagian yang relevan, lalu masukkan itu. Yang kedua inilah RAG — <a href="https://arxiv.org/abs/2005.11401">retrieval-augmented generation</a>.</p>
+
+<p>Fine-tuning bukan pengganti. Ia tidak memperbarui pengetahuan secara real-time, mahal untuk diulang, dan tetap tidak menjamin jawaban bisa ditelusuri ke sumber. Untuk dokumen pribadi yang berubah, retrieval jauh lebih murah dan lebih jujur.</p>
+
+<h2>2 · Dua loop</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 840 470" role="img" aria-label="Diagram dua loop RAG yang bertemu di Vectorize">
+	<defs>
+		<marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/>
+		</marker>
+	</defs>
+
+	<text class="col-title" x="22" y="18">INDEX-TIME · sekali per dokumen</text>
+	<text class="col-title" x="482" y="18">QUERY-TIME · tiap pertanyaan</text>
+
+	<!-- LEFT: index-time -->
+	<rect class="box" x="20" y="40" width="340" height="52" rx="6"/>
+	<text class="label" x="36" y="62">R2 — dokumen asli</text>
+	<text class="sub" x="36" y="79">pdf, md, txt · sumber kebenaran</text>
+
+	<rect class="box" x="20" y="120" width="340" height="52" rx="6"/>
+	<text class="label" x="36" y="142">Worker + Workflow — ekstrak &amp; chunk</text>
+	<text class="sub" x="36" y="159">300–800 token, overlap 10–20%</text>
+
+	<rect class="box" x="20" y="200" width="340" height="52" rx="6"/>
+	<text class="label" x="36" y="222">Workers AI bge-m3 — embed</text>
+	<text class="sub" x="36" y="239">satu vektor 1024 dimensi per chunk</text>
+
+	<line class="arrow" x1="190" y1="92" x2="190" y2="116" marker-end="url(#arrowhead)"/>
+	<line class="arrow" x1="190" y1="172" x2="190" y2="196" marker-end="url(#arrowhead)"/>
+	<line class="arrow" x1="190" y1="252" x2="190" y2="296" marker-end="url(#arrowhead)"/>
+
+	<!-- RIGHT: query-time -->
+	<rect class="box" x="480" y="40" width="340" height="52" rx="6"/>
+	<text class="label" x="496" y="62">Pertanyaan user</text>
+	<text class="sub" x="496" y="79">HTTP request · nanti streaming</text>
+
+	<rect class="box" x="480" y="120" width="340" height="52" rx="6"/>
+	<text class="label" x="496" y="142">bge-m3 — embed pertanyaan</text>
+	<text class="sub" x="496" y="159">model yang sama, wajib</text>
+
+	<rect class="box" x="480" y="200" width="340" height="52" rx="6"/>
+	<text class="label" x="496" y="222">Ambil top-K chunk</text>
+	<text class="sub" x="496" y="239">cosine · K = 8–20 · filter metadata</text>
+
+	<line class="arrow" x1="650" y1="92" x2="650" y2="116" marker-end="url(#arrowhead)"/>
+	<line class="arrow" x1="650" y1="172" x2="650" y2="196" marker-end="url(#arrowhead)"/>
+	<line class="arrow" x1="650" y1="252" x2="650" y2="296" marker-end="url(#arrowhead)"/>
+
+	<!-- SHARED INDEX -->
+	<rect class="box-accent" x="20" y="300" width="800" height="58" rx="6"/>
+	<text class="label" x="38" y="324">VECTORIZE — satu indeks, dua arah</text>
+	<text class="sub" x="38" y="341">upsert(vektor + metadata) dari kiri   ·   query(vektor, topK, filter) dari kanan</text>
+
+	<line class="arrow" x1="650" y1="358" x2="650" y2="386" marker-end="url(#arrowhead)"/>
+
+	<rect class="box" x="480" y="390" width="340" height="52" rx="6"/>
+	<text class="label" x="496" y="412">LLM + prompt — generate</text>
+	<text class="sub" x="496" y="429">jawaban + sitasi ke file asal</text>
+</svg>
+<figcaption>Perhatikan: tidak ada panah dari kiri ke kanan. Dua loop hanya berkomunikasi lewat indeks vektor. Ini yang membuat ingestion bisa berjalan berjam-jam tanpa memperlambat chat.</figcaption>
+</figure>
+
+<p><strong>Loop A (index-time)</strong> berjalan sekali per dokumen, atau setiap kali dokumen berubah. Boleh lambat: hitungannya detik sampai menit, dan pengguna tidak menunggu. Cocok untuk <a href="https://developers.cloudflare.com/workflows/">Workflow</a> yang tiap langkahnya punya retry sendiri.</p>
+
+<p><strong>Loop B (query-time)</strong> berjalan setiap pertanyaan. Ini yang dibatasi latency. Target realistis: byte pertama jawaban muncul di bawah dua detik. Karena itu loop B hanya boleh berisi satu embedding, satu query, dan satu panggilan model.</p>
+
+<div class="warn">
+	<span class="label">Kesalahan pemula</span>
+	<p>Menaruh kerja berat di loop yang salah. Meng-embed ulang seluruh dokumen saat ada pertanyaan (mahal, lambat), atau memindahkan semua logika kualitas ke loop A lalu berharap retrieval-nya otomatis bagus.</p>
+</div>
+
+<h2>3 · Enam kotak, satu platform</h2>
+
+<p>Di Cloudflare, tiap kotak di diagram itu punya produk yang jelas — dan semuanya diakses lewat <em>binding</em>, bukan SDK atau kredensial terpisah:</p>
+
+<table>
+<thead><tr><th>Kotak</th><th>Produk</th><th>Binding</th><th>Kenapa di sini</th></tr></thead>
+<tbody>
+<tr><td>Dokumen asli</td><td>R2</td><td><code>env.BUCKET</code></td><td>Murah, tanpa biaya egress, jadi sumber kebenaran</td></tr>
+<tr><td>Chunk</td><td>Workflows + D1</td><td><code>env.RAG_WORKFLOW</code>, <code>env.DB</code></td><td>D1 menyimpan teks dan metadata untuk ditampilkan</td></tr>
+<tr><td>Embedding</td><td>Workers AI · <code>bge-m3</code></td><td><code>env.AI</code></td><td>Multibahasa, 1024 dimensi, murah</td></tr>
+<tr><td>Indeks</td><td>Vectorize</td><td><code>env.VECTOR_INDEX</code></td><td>Satu tempat kedua loop bertemu</td></tr>
+<tr><td>Generasi</td><td>Workers AI · LLM</td><td><code>env.AI</code></td><td>Tidak perlu API key pihak ketiga</td></tr>
+<tr><td>Observability</td><td>AI Gateway</td><td>URL gateway</td><td>Log, cache, rate limit</td></tr>
+</tbody>
+</table>
+
+<p>Karena semuanya satu platform, satu request Worker bisa melakukan embedding, query vektor, dan generation tanpa satu pun kredensial eksternal. Itu keunggulan utamanya — dan juga alasan kamu perlu tahu batasnya, karena batas platform jadi batas aplikasimu.</p>
+
+<p>Sebagai pembanding: <a href="https://developers.cloudflare.com/ai-search/">AI Search</a> (namanya AutoRAG sampai September 2025) adalah versi <em>managed</em> dari kedua loop ini — indexing otomatis, hybrid search, metadata filter, bahkan endpoint MCP. Kita tidak memakainya sekarang karena tujuannya memahami isi kotak-kotaknya. Nanti di sesi terakhir kita bandingkan biaya dan tenaga yang dihemat.</p>
+
+<h2>4 · Satu hukum yang menyederhanakan semuanya</h2>
+
+<div class="note">
+	<span class="label">Hukum RAG</span>
+	<p>Kualitas jawaban tidak akan pernah melebihi kualitas retrieval. Kalau chunk yang benar tidak masuk top-K, model terbaik pun hanya bisa mengarang dengan lancar.</p>
+</div>
+
+<p>Konsekuensinya: sekitar 80% pekerjaan RAG adalah membuat retrieval benar. Prompt engineering hanya menyelesaikan sisa masalahnya. Ini juga berarti urutan debugging selalu sama — cek chunk mana yang terambil dulu, baru cek prompt.</p>
+
+<h2>5 · Tiga cara RAG gagal</h2>
+
+<div class="cards">
+	<div class="card">
+		<h4>Bilang "tidak tahu" padahal ada</h4>
+		<p>Chunk yang benar tidak terambil. Perbaiki di chunking, topK, atau tambahkan hybrid search dan reranker.</p>
+	</div>
+	<div class="card">
+		<h4>Lancar tapi salah</h4>
+		<p>Konteks terambil tapi tidak lengkap, atau prompt tidak memaksa jawaban bersandar pada konteks.</p>
+	</div>
+	<div class="card">
+		<h4>Benar tapi lambat</h4>
+		<p>Terlalu banyak chunk dikirim ke model. Rerank dulu, lalu batasi 4–6 chunk.</p>
+	</div>
+</div>
+
+<p>Ketiganya punya gejala berbeda dan perbaikan berbeda. Kemampuan membedakannya adalah skill inti yang akan kamu latih sepanjang seri ini — dan itu hanya mungkin kalau kamu bisa melihat chunk apa yang terambil.</p>
+
+<h2>6 · Angka yang perlu nempel</h2>
+
+<table>
+<thead><tr><th>Angka</th><th>Arti</th></tr></thead>
+<tbody>
+<tr><td><code>1024</code></td><td>Dimensi vektor <code>bge-m3</code> — angka ini dikunci saat indeks dibuat dan tidak bisa diubah</td></tr>
+<tr><td><code>50</code></td><td>topK maksimum bila kamu minta metadata ikut dikembalikan</td></tr>
+<tr><td><code>10 KiB</code></td><td>Metadata per vektor; hanya 64 byte pertama tiap string yang bisa difilter</td></tr>
+<tr><td><code>10.000</code></td><td>Neuron gratis per hari — cukup untuk beberapa ratus pertanyaan</td></tr>
+<tr><td><code>10 ms</code></td><td>CPU time Workers Free. Ini alasan ingestion harus asinkron</td></tr>
+</tbody>
+</table>
+
+<p class="small">Sumber angka: <a href="https://developers.cloudflare.com/vectorize/platform/limits/">Vectorize limits</a>, <a href="https://developers.cloudflare.com/workers/platform/limits/">Workers limits</a>, <a href="https://developers.cloudflare.com/workers-ai/platform/pricing/">Workers AI pricing</a>.</p>
+
+<h2>7 · Latihan: buat alat ukurmu dulu</h2>
+
+<p>Sebelum membangun apa pun, kamu perlu cara tahu apakah yang kamu bangun bekerja. Bukan metrik rumit — sepuluh pertanyaan yang kamu tahu jawabannya.</p>
+
+<p>Buka <code>eval/questions.md</code> di workspace ini. Isi sepuluh baris dengan:</p>
+
+<ul class="checklist">
+	<li><strong>5 dokumen</strong> dari koleksimu yang benar-benar ingin kamu tanyai (catatan, PDF, md).</li>
+	<li><strong>10 pertanyaan</strong> yang jawabannya ada di dokumen itu — campur faktual, definisi, angka, dan perbandingan.</li>
+	<li><strong>Jawaban acuan</strong> 1–2 kalimat per pertanyaan. Ini yang nanti dibandingkan dengan output model.</li>
+	<li><strong>Nama file sumber</strong> per pertanyaan, supaya kamu bisa memeriksa apakah retrieval mengambil file yang tepat.</li>
+	<li><strong>Satu pertanyaan jebakan</strong> yang jawabannya tidak ada di korpus — untuk menguji apakah sistem berani menolak.</li>
+</ul>
+
+<div class="win">
+	<span class="label">Hasil sesi ini</span>
+	<p>Kamu punya peta pipeline yang bisa digambar dari memori, dan satu set pertanyaan uji yang akan dipakai sebagai alat ukur di setiap sesi berikutnya.</p>
+</div>
+
+<h2>8 · Cek pemahaman</h2>
+
+<p>Sebelum kuis, lakukan ini: tutup halaman, lalu tulis dari memori lima langkah loop query-time dan tiga komponen Cloudflare yang terlibat. Menulis dari memori jauh lebih efektif daripada membaca ulang — ini <em>retrieval practice</em>, dan efeknya besar untuk retensi jangka panjang.</p>
+
+<details>
+	<summary>Buka untuk membandingkan jawabanmu</summary>
+	<p>Lima langkah: (1) terima pertanyaan, (2) embed pertanyaan dengan model yang sama seperti saat indexing, (3) query Vectorize dengan topK dan filter, (4) susun prompt berisi chunk terambil, (5) minta LLM menjawab dengan sitasi. Komponen: Workers (orkestrasi), Workers AI (embedding + generation), Vectorize (indeks).</p>
+</details>
+
+<div class="quiz">
+
+	<div class="quiz-q" data-answer="1" data-explain="Embedding dokumen dihitung saat dokumen masuk indeks. Kalau dihitung ulang tiap pertanyaan, biaya dan latency meledak tanpa manfaat.">
+		<p class="q-text">1. Kapan embedding dokumen seharusnya dihitung?</p>
+		<div class="opts">
+			<button class="opt" type="button">Setiap kali pengguna mengirim pertanyaan</button>
+			<button class="opt" type="button">Sekali saat dokumen masuk indeks</button>
+			<button class="opt" type="button">Setiap kali jawaban selesai dibuat</button>
+			<button class="opt" type="button">Setiap kali server worker restart</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="0" data-explain="Dimensi dan metrik terkunci saat indeks dibuat. Ganti model 768 ke 1024 dimensi berarti indeks baru dan re-index seluruh korpus.">
+		<p class="q-text">2. Kamu ganti model embedding dari 768 ke 1024 dimensi. Apa yang harus terjadi?</p>
+		<div class="opts">
+			<button class="opt" type="button">Indeks Vectorize harus dibuat ulang</button>
+			<button class="opt" type="button">Metadata vektor harus dihapus dulu</button>
+			<button class="opt" type="button">Nilai topK harus dinaikkan dulu</button>
+			<button class="opt" type="button">Prompt sistem harus diperbarui dulu</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="3" data-explain="Kalau chunk yang benar tidak terambil, tidak ada prompt yang bisa menyelamatkan. Perbaiki di sisi retrieval: chunking, topK, atau reranker.">
+		<p class="q-text">3. Jawaban salah karena chunk yang benar tidak terambil. Di mana perbaikannya?</p>
+		<div class="opts">
+			<button class="opt" type="button">Di prompt dan pengaturan suhu</button>
+			<button class="opt" type="button">Di cache dan batas laju</button>
+			<button class="opt" type="button">Di UI dan gaya tampilan</button>
+			<button class="opt" type="button">Di chunking dan tahap retrieval</button>
+		</div>
+	</div>
+
+	<div class="quiz-q" data-answer="2" data-explain="Filter metadata menyempitkan kandidat sebelum top-K dihitung — berguna untuk membatasi ke satu sumber atau satu pengguna. Ia bukan pengganti reranker.">
+		<p class="q-text">4. Apa fungsi metadata pada vektor di Vectorize?</p>
+		<div class="opts">
+			<button class="opt" type="button">Menyimpan salinan teks secara utuh</button>
+			<button class="opt" type="button">Mempercepat proses embedding setiap dokumen</button>
+			<button class="opt" type="button">Menyaring kandidat sebelum topK dihitung</button>
+			<button class="opt" type="button">Menggantikan fungsi dari model reranker</button>
+		</div>
+	</div>
+
+</div>
+
+<h2>9 · Sumber utama sesi ini</h2>
+
+<p>Baca satu ini saja, jangan menumpuk: <a href="https://developers.cloudflare.com/workers-ai/guides/tutorials/build-a-retrieval-augmented-generation-ai/">Build a Retrieval Augmented Generation (RAG) AI — dokumentasi Cloudflare</a>. Tutorial resmi ini memakai <code>bge-base-en-v1.5</code> (Inggris, 768 dimensi) — kita akan menggantinya dengan <code>bge-m3</code> karena dokumenmu berbahasa Indonesia, tapi struktur alurnya sama persis dengan diagram di atas.</p>
+
+<p class="small">Untuk nanti, bukan sekarang: <a href="https://www.anthropic.com/research/contextual-retrieval">Contextual Retrieval (Anthropic)</a> — bukti terukur bahwa memberi konteks pada tiap chunk memotong kegagalan retrieval sekitar 49%, dan 67% bila ditambah reranking.</p>
+
+<div class="next">
+	<span class="label">Sesi berikutnya</span>
+	<p><strong>Sesi 2 — Panggilan pertama:</strong> scaffold project TypeScript, pasang binding <code>AI</code>, embed satu kalimat dengan <code>bge-m3</code>, lihat vektor 1024 dimensinya, lalu deploy. Kita juga akan memilih model embedding secara sadar, bukan menyalin dari tutorial.</p>
+</div>
+
+<div class="next">
+	<span class="label">Tanya gurunya</span>
+	<p>Aku di sini untuk hal yang belum jelas: kenapa cosine dan bukan dot-product, kenapa R2 dan bukan langsung D1, atau kenapa 1024 dimensi terasa boros. Tanya saja — lebih cepat daripada menebak.</p>
+</div>
+
+<div class="foot">
+	<span>RAG di Cloudflare · Sesi 1 dari 7</span>
+	<span><a href="../reference/rag-pipeline-map.html">Cheat sheet →</a></span>
+</div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

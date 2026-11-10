@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cheat Sheet — Peta RAG di Cloudflare</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="page sheet">
+
+<nav class="crumbs">
+	<a href="../lessons/0001-mental-model-rag.html">Sesi 1</a> ·
+	Referensi
+</nav>
+
+<div class="kicker">Cheat sheet · cetak &amp; tempel</div>
+<h1>Peta RAG di Cloudflare</h1>
+<p class="lede">Ringkasan satu halaman: dua loop, enam komponen, angka batas, dan parameter awal yang aman. Semua angka berasal dari dokumentasi Cloudflare per November 2026.</p>
+
+<h2>1 · Dua loop</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 840 240" role="img" aria-label="Dua lane: index-time dan query-time yang bertemu di Vectorize">
+	<defs>
+		<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/>
+		</marker>
+	</defs>
+
+	<text class="col-title" x="20" y="16">INDEX-TIME · sekali per dokumen / saat berubah</text>
+	<text class="col-title" x="450" y="16">QUERY-TIME · setiap pertanyaan</text>
+
+	<!-- lane index -->
+	<rect class="box" x="20" y="34" width="120" height="46" rx="6"/>
+	<text class="label" x="34" y="55">R2</text>
+	<text class="sub" x="34" y="70">dokumen asli</text>
+
+	<rect class="box" x="180" y="34" width="130" height="46" rx="6"/>
+	<text class="label" x="194" y="55">chunk</text>
+	<text class="sub" x="194" y="70">recursive split</text>
+
+	<rect class="box" x="350" y="34" width="120" height="46" rx="6"/>
+	<text class="label" x="364" y="55">embed</text>
+	<text class="sub" x="364" y="70">bge-m3</text>
+
+	<line class="arrow" x1="140" y1="57" x2="176" y2="57" marker-end="url(#ah)"/>
+	<line class="arrow" x1="310" y1="57" x2="346" y2="57" marker-end="url(#ah)"/>
+
+	<!-- lane query -->
+	<rect class="box" x="470" y="34" width="120" height="46" rx="6"/>
+	<text class="label" x="484" y="55">pertanyaan</text>
+	<text class="sub" x="484" y="70">dari user</text>
+
+	<rect class="box" x="630" y="34" width="120" height="46" rx="6"/>
+	<text class="label" x="644" y="55">embed query</text>
+	<text class="sub" x="644" y="70">bge-m3</text>
+
+	<line class="arrow" x1="590" y1="57" x2="626" y2="57" marker-end="url(#ah)"/>
+
+	<!-- shared index -->
+	<rect class="box-accent" x="20" y="120" width="790" height="52" rx="6"/>
+	<text class="label" x="36" y="143">VECTORIZE — satu indeks, dua arah</text>
+	<text class="sub" x="36" y="159">upsert(v) + metadata ← index-time   ·   query(vektor, topK, filter) → query-time</text>
+
+	<line class="arrow" x1="410" y1="80" x2="410" y2="116" marker-end="url(#ah)"/>
+	<line class="arrow" x1="690" y1="80" x2="690" y2="116" marker-end="url(#ah)"/>
+
+	<rect class="box" x="620" y="190" width="160" height="42" rx="6"/>
+	<text class="label" x="634" y="209">LLM + prompt</text>
+	<text class="sub" x="634" y="224">jawaban + sitasi</text>
+
+	<line class="arrow" x1="690" y1="172" x2="690" y2="186" marker-end="url(#ah)"/>
+</svg>
+<figcaption>Loop kiri boleh lambat dan asinkron. Loop kanan dibatasi latency. Satu-satunya titik temu keduanya adalah indeks vektor — dan itu sebabnya dimensi indeks harus ditentukan sebelum dokumen pertama masuk.</figcaption>
+</figure>
+
+<h2>2 · Komponen dan binding</h2>
+
+<table>
+<thead><tr><th>Komponen</th><th>Peran</th><th>Binding</th><th>Batas yang sering menggigit</th></tr></thead>
+<tbody>
+<tr><td>Workers</td><td>HTTP API, orkestrasi, streaming</td><td>—</td><td>CPU 10 ms (Free) / 30 s default (Paid); I/O tidak dihitung CPU</td></tr>
+<tr><td>Workers AI</td><td>Embedding dan generation</td><td><code>env.AI</code></td><td>10.000 neuron/hari gratis; 3.000 req/menit embedding</td></tr>
+<tr><td>Vectorize</td><td>Indeks vektor + metadata</td><td><code>env.VECTOR_INDEX</code></td><td>topK ≤ 50 bila minta metadata; 20 jt vektor/indeks</td></tr>
+<tr><td>R2</td><td>File asli (sumber kebenaran)</td><td><code>env.BUCKET</code></td><td>10 GB gratis; jangan simpan teks chunk di sini</td></tr>
+<tr><td>D1</td><td>Teks chunk + metadata relasional</td><td><code>env.DB</code></td><td>Perlu untuk tampilkan sumber &amp; join</td></tr>
+<tr><td>Workflows</td><td>Ingestion yang tahan gagal</td><td><code>env.RAG_WORKFLOW</code></td><td>Tiap step punya retry sendiri</td></tr>
+<tr><td>AI Gateway</td><td>Log, cache, rate limit, fallback</td><td>URL / dashboard</td><td>Opsional, tapi hampir wajib untuk produksi</td></tr>
+</tbody>
+</table>
+
+<h2>3 · Angka yang perlu dihafal</h2>
+
+<table>
+<thead><tr><th>Angka</th><th>Arti</th></tr></thead>
+<tbody>
+<tr><td><code>1024</code></td><td>Dimensi <code>@cf/baai/bge-m3</code> (multibahasa). <code>bge-base-en-v1.5</code> = 768, <code>bge-large-en-v1.5</code> = 1024 (Inggris).</td></tr>
+<tr><td><code>50</code></td><td>topK maksimum bila meminta metadata/values. Tanpa keduanya: 100.</td></tr>
+<tr><td><code>10 KiB</code></td><td>Metadata per vektor. String yang bisa difilter hanya 64 byte pertama.</td></tr>
+<tr><td><code>10</code></td><td>Metadata index maksimum per indeks Vectorize.</td></tr>
+<tr><td><code>1000</code></td><td>Upsert per batch lewat binding Workers (5.000 lewat HTTP API).</td></tr>
+<tr><td><code>1536</code></td><td>Dimensi maksimum yang didukung Vectorize.</td></tr>
+<tr><td><code>10.000</code></td><td>Neuron gratis per hari (Workers AI).</td></tr>
+</tbody>
+</table>
+
+<h2>4 · Parameter awal yang aman</h2>
+
+<table>
+<thead><tr><th>Knob</th><th>Mulai dari</th><th>Naikkan bila</th></tr></thead>
+<tbody>
+<tr><td>Chunk size</td><td>300–800 token</td><td>Jawaban butuh konteks panjang dan sering terpotong</td></tr>
+<tr><td>Chunk overlap</td><td>10–20%</td><td>Kalimat kunci sering terbelah antar chunk</td></tr>
+<tr><td>topK</td><td>8–20</td><td>Recall rendah padahal dokumen ada</td></tr>
+<tr><td>Chunk final ke prompt</td><td>4–6 setelah rerank</td><td>Jawaban butuh sintesis dari banyak bagian</td></tr>
+<tr><td>Similarity threshold</td><td>Tidak dipakai dulu</td><td>Sudah punya data skor untuk memilih ambang</td></tr>
+</tbody>
+</table>
+
+<div class="warn">
+	<span class="label">Jebakan</span>
+	<p>Dimensi dan metrik indeks Vectorize <strong>tidak bisa diubah</strong> setelah dibuat. Ganti model embedding berarti membuat indeks baru dan mengisi ulang semua vektor.</p>
+</div>
+
+<h2>5 · Tiga mode kegagalan</h2>
+
+<table>
+<thead><tr><th>Gejala</th><th>Penyebab paling sering</th><th>Perbaikan</th></tr></thead>
+<tbody>
+<tr><td>"Saya tidak tahu" padahal ada di dokumen</td><td>Chunk yang benar tidak masuk top-K</td><td>Perbaiki chunking, tambah hybrid search, naikkan topK, tambah reranker</td></tr>
+<tr><td>Jawaban lancar tapi salah</td><td>Konteks terambil tapi tidak lengkap, prompt tidak mewajibkan sitasi</td><td>Overlap, contextual chunk, instruksi "jawab hanya dari konteks"</td></tr>
+<tr><td>Benar tapi lambat dan mahal</td><td>Terlalu banyak chunk dikirim ke LLM</td><td>Rerank lalu batasi 4–6 chunk, cache jawaban, streaming</td></tr>
+</tbody>
+</table>
+
+<h2>6 · Hitungan biaya kasar</h2>
+
+<p class="small">Asumsi: 1.000 chunk × 400 token; tiap pertanyaan mengirim 8 chunk (3.200 token) + 300 token instruksi, output 300 token.</p>
+
+<table>
+<thead><tr><th>Tahap</th><th>Perhitungan</th><th>Biaya</th></tr></thead>
+<tbody>
+<tr><td>Embedding seluruh korpus</td><td>400 rb token × $0,012/M</td><td>≈ $0,005 (sekali)</td></tr>
+<tr><td>Query + jawaban (qwen3-30b)</td><td>3,5 rb × $0,051/M + 300 × $0,335/M</td><td>≈ $0,0003 / pertanyaan</td></tr>
+<tr><td>Query + jawaban (llama-3.3-70b)</td><td>3,5 rb × $0,293/M + 300 × $2,253/M</td><td>≈ $0,0017 / pertanyaan</td></tr>
+<tr><td>Rerank 20 kandidat</td><td>8 rb token × $0,003/M</td><td>≈ $0,00002 / pertanyaan</td></tr>
+</tbody>
+</table>
+
+<p class="small">Konsekuensi praktis: 10.000 neuron/hari ≈ 400 pertanyaan/hari dengan model 30B murah. Embedding korpus pribadi praktis gratis; biaya sebenarnya ada di token jawaban.</p>
+
+<h2>7 · Checklist produksi</h2>
+
+<ul class="checklist">
+	<li>ID vektor deterministik (<code>hash(source + chunkIndex)</code>) supaya ingestion idempotent.</li>
+	<li>Ingestion di Workflow/Queue, bukan di request handler.</li>
+	<li>Metadata index dibuat <em>sebelum</em> vektor pertama di-upsert.</li>
+	<li>Prompt mewajibkan sitasi dan menolak menjawab tanpa konteks.</li>
+	<li>Chunk diperlakukan sebagai input tidak tepercaya (risiko prompt injection dari dokumen).</li>
+	<li>Rate limit + cache di AI Gateway; log pertanyaan yang gagal.</li>
+	<li>Set evaluasi (10–30 pertanyaan) dijalankan setiap kali chunking/prompt berubah.</li>
+</ul>
+
+<h2>8 · Sumber</h2>
+<ul>
+	<li><a href="https://developers.cloudflare.com/workers-ai/guides/tutorials/build-a-retrieval-augmented-generation-ai/">Cloudflare — Build a RAG AI</a></li>
+	<li><a href="https://developers.cloudflare.com/vectorize/reference/client-api/">Vectorize API</a> · <a href="https://developers.cloudflare.com/vectorize/platform/limits/">Limits</a> · <a href="https://developers.cloudflare.com/vectorize/reference/metadata-filtering/">Metadata filtering</a></li>
+	<li><a href="https://developers.cloudflare.com/workers-ai/platform/pricing/">Workers AI pricing</a> · <a href="https://developers.cloudflare.com/workers/platform/limits/">Workers limits</a></li>
+	<li><a href="https://www.anthropic.com/research/contextual-retrieval">Anthropic — Contextual Retrieval</a></li>
+</ul>
+
+<div class="foot">
+	<span>RAG di Cloudflare · cheat sheet</span>
+	<span><a href="../lessons/0001-mental-model-rag.html">Sesi 1 →</a></span>
+</div>
+
+</main>
+</body>
+</html>
